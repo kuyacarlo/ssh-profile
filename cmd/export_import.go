@@ -19,8 +19,7 @@ func (r *Root) exportCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, ok := r.cfg.Lookup(args[0])
 			if !ok {
-				r.exitMissingProfile(cmd, args[0])
-				return nil
+				return missingProfileError(args[0])
 			}
 			data, err := json.Marshal(p)
 			if err != nil {

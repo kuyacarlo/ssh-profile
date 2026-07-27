@@ -281,8 +281,7 @@ func (r *Root) showCmd() *cobra.Command {
 			}
 			p, ok := r.cfg.Lookup(name)
 			if !ok {
-				r.exitMissingProfile(cmd, name)
-				return nil
+				return missingProfileError(name)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "profile: %s\n", name)
 			fmt.Fprintf(cmd.OutOrStdout(), "identity_file: %s\n", p.IdentityFile)
@@ -325,8 +324,7 @@ func (r *Root) delCmd() *cobra.Command {
 				name = selected
 			}
 			if !r.cfg.DeleteProfile(name) {
-				r.exitMissingProfile(cmd, name)
-				return nil
+				return missingProfileError(name)
 			}
 			if err := r.saveConfig(); err != nil {
 				return err
@@ -350,8 +348,8 @@ func (r *Root) useCmd() *cobra.Command {
 			"Records current-profile.ssh (pairs with git-profile's current-profile.name).",
 			"",
 			"Remote target (optional 2nd arg):",
-			"  demo-repo              → git@github.com:<github_user>/demo-repo.git",
-			"  example-org/demo-repo    → git@github.com:example-org/demo-repo.git",
+			"  demo-repo             → git@github.com:<github_user>/demo-repo.git",
+			"  example-org/demo-repo → git@github.com:example-org/demo-repo.git",
 			"",
 			"With no args: interactive profile select.",
 			"With no 2nd arg: origin from directory name, or normalize existing GitHub remote.",
@@ -365,8 +363,8 @@ func (r *Root) useCmd() *cobra.Command {
 		),
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !r.checkRepo(cmd) {
-				os.Exit(1)
+			if err := r.checkRepo(cmd); err != nil {
+				return err
 			}
 			if !r.checkProfiles(cmd) {
 				return nil
@@ -394,8 +392,7 @@ func (r *Root) useCmd() *cobra.Command {
 
 			p, ok := r.cfg.Lookup(name)
 			if !ok {
-				r.exitMissingProfile(cmd, name)
-				return nil
+				return missingProfileError(name)
 			}
 			result, err := apply.Use(r.git, name, p, apply.Options{
 				Target:   target,
@@ -433,8 +430,8 @@ func (r *Root) unuseCmd() *cobra.Command {
 		Short:   "Clear git-ssh settings from this git repo",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !r.checkRepo(cmd) {
-				os.Exit(1)
+			if err := r.checkRepo(cmd); err != nil {
+				return err
 			}
 			if err := apply.Unuse(r.git); err != nil {
 				return err
@@ -452,8 +449,8 @@ func (r *Root) currentCmd() *cobra.Command {
 		Short:   "Show active profile in this git repo",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !r.checkRepo(cmd) {
-				os.Exit(1)
+			if err := r.checkRepo(cmd); err != nil {
+				return err
 			}
 			name, err := apply.Current(r.git)
 			if err != nil || name == "" {

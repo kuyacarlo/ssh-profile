@@ -2,17 +2,15 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 )
 
-func (r *Root) checkRepo(cmd *cobra.Command) bool {
+func (r *Root) checkRepo(cmd *cobra.Command) error {
 	if !r.git.IsRepository() {
-		fmt.Fprintln(cmd.ErrOrStderr(), "The current working directory is not a valid git repository.")
-		return false
+		return fmt.Errorf("the current working directory is not a valid git repository")
 	}
-	return true
+	return nil
 }
 
 func (r *Root) checkProfiles(cmd *cobra.Command) bool {
@@ -25,7 +23,6 @@ func (r *Root) checkProfiles(cmd *cobra.Command) bool {
 	return true
 }
 
-func (r *Root) exitMissingProfile(cmd *cobra.Command, name string) {
-	fmt.Fprintf(cmd.ErrOrStderr(), "There is no profile with `%s` name\n", name)
-	os.Exit(0)
+func missingProfileError(name string) error {
+	return fmt.Errorf("there is no profile with `%s` name", name)
 }

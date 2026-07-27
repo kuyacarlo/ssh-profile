@@ -51,7 +51,7 @@ func Exists(fp string) (string, error) {
 		return "", err
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("path is a Folder")
+		return "", fmt.Errorf("path is a directory")
 	}
 	return file, nil
 }
