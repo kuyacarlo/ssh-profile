@@ -11,6 +11,7 @@ import (
 	"github.com/ssh-profiles/git-ssh/internal/git"
 	"github.com/ssh-profiles/git-ssh/internal/include"
 	"github.com/ssh-profiles/git-ssh/internal/keys"
+	"github.com/ssh-profiles/git-ssh/internal/remoteurl"
 	"github.com/ssh-profiles/git-ssh/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -476,11 +477,25 @@ func (r *Root) useCmd() *cobra.Command {
 			case "skipped":
 				fmt.Fprintln(cmd.OutOrStdout(), "  origin: skipped")
 			}
+			warnNonGitHubOrigin(cmd, name, result.RemoteURL, result.RemoteAction)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&noRemote, "no-remote", false, "only set SSH key; do not create/update origin")
 	return cmd
+}
+
+func warnNonGitHubOrigin(cmd *cobra.Command, profile, remoteURL, action string) {
+	if action == "skipped" || strings.TrimSpace(remoteURL) == "" {
+		return
+	}
+	if _, _, ok := remoteurl.ParseOwnerRepo(remoteURL); ok {
+		return
+	}
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"warning: origin is not GitHub (%s); Orca will report no GitHub source.\n", remoteURL)
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"  retarget: git-ssh use %s <repo|owner/repo>\n", profile)
 }
 
 func (r *Root) unuseCmd() *cobra.Command {

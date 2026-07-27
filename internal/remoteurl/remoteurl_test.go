@@ -37,7 +37,7 @@ func TestParseAndNormalize(t *testing.T) {
 		{"git@github.com:alice/test1.git", "alice", "test1", "git@github.com:alice/test1.git", true},
 		{"git@alice.github.com:alice/test1.git", "alice", "test1", "git@github.com:alice/test1.git", true},
 		{"alice.github.com:alice/test1", "alice", "test1", "git@github.com:alice/test1.git", true},
-		{"https://github.com/alice/test1.git", "alice", "test1", "git@github.com:alice/test1.git", true},
+		{"github.com:alice/test1", "alice", "test1", "git@github.com:alice/test1.git", true},
 		{"ssh://git@forge.example.com/alice/other-repo.git", "", "", "", false},
 	}
 
