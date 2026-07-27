@@ -72,6 +72,8 @@ func New() *Root {
 		r.useCmd(),
 		r.unuseCmd(),
 		r.currentCmd(),
+		r.backupCmd(),
+		r.restoreCmd(),
 		r.versionCmd(),
 	)
 
@@ -295,6 +297,91 @@ func (r *Root) currentCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func (r *Root) backupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backup [file]",
+		Short: "Backup profiles to a JSON file",
+		Long: multiline(
+			"Writes the sidecar profile store to a JSON file.",
+			"If no path is given, creates a timestamped file under",
+			"~/.config/git-ssh/backups/.",
+		),
+		Example: multiline(
+			`git-ssh backup`,
+			`git-ssh backup ./git-ssh-backup.json`,
+		),
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path := ""
+			if len(args) == 1 {
+				path = args[0]
+			} else {
+				p, err := config.BackupPath()
+				if err != nil {
+					return err
+				}
+				path = p
+			}
+			if err := r.cfg.Save(path); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Backed up %d profile(s) to %s\n", r.cfg.Len(), path)
+			return nil
+		},
+	}
+}
+
+func (r *Root) restoreCmd() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "restore <file>",
+		Short: "Restore profiles from a backup JSON file",
+		Long: multiline(
+			"Replaces the current sidecar config with the backup,",
+			"then rewrites owned Include fragments under ~/.ssh/git-ssh.d/.",
+		),
+		Example: `git-ssh restore ~/.config/git-ssh/backups/git-ssh-20260727-093000.json`,
+		Args:   cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			backupPath := args[0]
+			incoming := config.New()
+			if err := incoming.LoadExisting(backupPath); err != nil {
+				return err
+			}
+			if !force && r.cfg.Len() > 0 {
+				return fmt.Errorf("current config has %d profile(s); pass --force to overwrite", r.cfg.Len())
+			}
+
+			// Drop include fragments for profiles that will disappear.
+			oldNames := r.cfg.Names()
+			incomingNames := map[string]struct{}{}
+			for _, name := range incoming.Names() {
+				incomingNames[name] = struct{}{}
+			}
+			for _, name := range oldNames {
+				if _, keep := incomingNames[name]; !keep {
+					_ = include.RemoveProfile(name)
+				}
+			}
+
+			r.cfg.ReplaceAll(incoming)
+			if err := r.saveConfig(); err != nil {
+				return err
+			}
+			for _, name := range r.cfg.Names() {
+				p, _ := r.cfg.Lookup(name)
+				if err := include.WriteProfile(name, p); err != nil {
+					return fmt.Errorf("restored config but include write failed for %q: %w", name, err)
+				}
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Restored %d profile(s) from %s\n", r.cfg.Len(), backupPath)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "overwrite non-empty current config")
+	return cmd
 }
 
 func (r *Root) versionCmd() *cobra.Command {
