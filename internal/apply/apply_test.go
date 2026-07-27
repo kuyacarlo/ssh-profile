@@ -3,6 +3,7 @@ package apply
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ssh-profiles/git-ssh/internal/config"
@@ -177,4 +178,29 @@ func TestUnuse(t *testing.T) {
 	is.NoErr(Unuse(vcs))
 	is.Equal(vcs.kv[ProfileKey], "")
 	is.Equal(vcs.remotes["origin"], "git@github.com:a/b.git")
+}
+
+func TestCurrent(t *testing.T) {
+	is := is.New(t)
+	vcs := &fakeVCS{repo: true, kv: map[string]string{ProfileKey: "alice"}}
+	name, err := Current(vcs)
+	is.NoErr(err)
+	is.Equal(name, "alice")
+
+	_, err = Current(&fakeVCS{repo: false})
+	is.True(err != nil)
+}
+
+func TestSSHCommandForQuotesSpaces(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	keyDir := filepath.Join(dir, "my keys")
+	is.NoErr(os.MkdirAll(keyDir, 0o700))
+	key := filepath.Join(keyDir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	cmd, err := SSHCommandFor(key)
+	is.NoErr(err)
+	is.True(strings.Contains(cmd, `"`+key+`"`))
+	is.True(strings.Contains(cmd, "IdentitiesOnly=yes"))
 }
