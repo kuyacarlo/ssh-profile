@@ -12,9 +12,11 @@ import (
 )
 
 // Profile is a named SSH identity for git remotes.
-// Remotes stay on github.com; `use` applies the key via core.sshCommand.
+// Remotes stay on github.com; `use` applies the key via core.sshCommand
+// and can create/normalize origin to git@github.com:<github_user>/<repo>.git.
 type Profile struct {
 	IdentityFile string            `json:"identity_file"`
+	GithubUser   string            `json:"github_user,omitempty"`
 	HostAlias    string            `json:"host_alias,omitempty"`
 	Config       map[string]string `json:"config,omitempty"`
 }

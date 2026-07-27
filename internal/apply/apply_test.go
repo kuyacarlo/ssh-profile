@@ -10,8 +10,10 @@ import (
 )
 
 type fakeVCS struct {
-	repo bool
-	kv   map[string]string
+	repo    bool
+	top     string
+	kv      map[string]string
+	remotes map[string]string
 }
 
 func (f *fakeVCS) IsRepository() bool { return f.repo }
@@ -33,46 +35,106 @@ func (f *fakeVCS) Unset(key string) error {
 	return nil
 }
 
+func (f *fakeVCS) TopLevel() (string, error) { return f.top, nil }
+
+func (f *fakeVCS) HasRemote(name string) bool {
+	_, ok := f.remotes[name]
+	return ok
+}
+
+func (f *fakeVCS) GetRemote(name string) (string, error) {
+	return f.remotes[name], nil
+}
+
+func (f *fakeVCS) EnsureRemote(name string, value string) error {
+	if f.remotes == nil {
+		f.remotes = map[string]string{}
+	}
+	f.remotes[name] = value
+	return nil
+}
+
 func writeEd25519Private(t *testing.T, path string) {
 	t.Helper()
-	// Minimal PEM wrapper — ClassifyKey only checks PEM framing.
 	pem := "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
 	if err := os.WriteFile(path, []byte(pem), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestUseUnuseCurrent(t *testing.T) {
+func TestUseAddsOrigin(t *testing.T) {
 	is := is.New(t)
 	dir := t.TempDir()
 	key := filepath.Join(dir, "id_ed25519")
 	writeEd25519Private(t, key)
 
-	vcs := &fakeVCS{repo: true, kv: map[string]string{}}
-	profile := config.Profile{IdentityFile: key}
+	vcs := &fakeVCS{
+		repo:    true,
+		top:     filepath.Join(dir, "test1"),
+		kv:      map[string]string{},
+		remotes: map[string]string{},
+	}
+	profile := config.Profile{
+		IdentityFile: key,
+		GithubUser:   "alice",
+	}
 
-	is.NoErr(Use(vcs, "kc", profile))
-	is.Equal(vcs.kv[ProfileKey], "kc")
-	is.True(vcs.kv[SSHCommand] != "")
-	is.True(filepath.Base(vcs.kv[SSHCommand]) != "") // smoke
-
-	name, err := Current(vcs)
+	result, err := Use(vcs, "alice", profile, Options{})
 	is.NoErr(err)
-	is.Equal(name, "kc")
+	is.Equal(result.RemoteAction, "added")
+	is.Equal(result.RemoteURL, "git@github.com:alice/test1.git")
+	is.Equal(vcs.remotes["origin"], "git@github.com:alice/test1.git")
+	is.Equal(vcs.kv[ProfileKey], "alice")
+}
 
+func TestUseNormalizesAliasRemote(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	vcs := &fakeVCS{
+		repo: true,
+		top:  dir,
+		kv:   map[string]string{},
+		remotes: map[string]string{
+			"origin": "git@alice.github.com:alice/old.git",
+		},
+	}
+	result, err := Use(vcs, "alice", config.Profile{IdentityFile: key, GithubUser: "alice"}, Options{})
+	is.NoErr(err)
+	is.Equal(result.RemoteAction, "updated")
+	is.Equal(vcs.remotes["origin"], "git@github.com:alice/old.git")
+}
+
+func TestUseNoRemoteFlag(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	vcs := &fakeVCS{repo: true, top: dir, kv: map[string]string{}, remotes: map[string]string{}}
+	result, err := Use(vcs, "x", config.Profile{IdentityFile: key, GithubUser: "alice"}, Options{NoRemote: true})
+	is.NoErr(err)
+	is.Equal(result.RemoteAction, "skipped")
+	is.Equal(len(vcs.remotes), 0)
+}
+
+func TestUseRequiresGithubUserWhenNoOrigin(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	vcs := &fakeVCS{repo: true, top: dir, kv: map[string]string{}, remotes: map[string]string{}}
+	_, err := Use(vcs, "x", config.Profile{IdentityFile: key}, Options{})
+	is.True(err != nil)
+}
+
+func TestUnuse(t *testing.T) {
+	is := is.New(t)
+	vcs := &fakeVCS{repo: true, kv: map[string]string{ProfileKey: "x", SSHCommand: "ssh"}, remotes: map[string]string{"origin": "git@github.com:a/b.git"}}
 	is.NoErr(Unuse(vcs))
 	is.Equal(vcs.kv[ProfileKey], "")
-	is.Equal(vcs.kv[SSHCommand], "")
-}
-
-func TestUseRequiresRepo(t *testing.T) {
-	is := is.New(t)
-	err := Use(&fakeVCS{repo: false}, "x", config.Profile{IdentityFile: "y"})
-	is.True(err != nil)
-}
-
-func TestSSHCommandForRejectsMissing(t *testing.T) {
-	is := is.New(t)
-	_, err := SSHCommandFor(filepath.Join(t.TempDir(), "nope"))
-	is.True(err != nil)
+	is.Equal(vcs.remotes["origin"], "git@github.com:a/b.git")
 }

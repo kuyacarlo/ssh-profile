@@ -60,15 +60,41 @@ func (g *Git) Unset(key string) error {
 	return nil
 }
 
+// TopLevel returns the repository root path.
+func (g *Git) TopLevel() (string, error) {
+	out, err := g.exec("git", "rev-parse", "--show-toplevel").CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
 func (g *Git) GetRemote(key string) (string, error) {
 	out, err := g.exec("git", "remote", "get-url", key).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
+}
+
+// HasRemote reports whether a named remote exists.
+func (g *Git) HasRemote(name string) bool {
+	_, err := g.GetRemote(name)
+	return err == nil
+}
+
+// AddRemote creates a new remote.
+func (g *Git) AddRemote(name string, value string) error {
+	_, err := g.exec("git", "remote", "add", name, value).CombinedOutput()
+	return err
 }
 
 func (g *Git) SetRemote(key string, value string) error {
 	_, err := g.exec("git", "remote", "set-url", key, value).CombinedOutput()
 
 	return err
+}
+
+// EnsureRemote adds or updates a remote URL.
+func (g *Git) EnsureRemote(name string, value string) error {
+	if g.HasRemote(name) {
+		return g.SetRemote(name, value)
+	}
+	return g.AddRemote(name, value)
 }
 
 func (g *Git) UnsetRemote(key string) error {

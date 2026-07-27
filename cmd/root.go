@@ -41,12 +41,13 @@ func New() *Root {
 		Short: "Per-repo SSH identity profiles for GitHub (Orca-safe)",
 		Long: multiline(
 			"git-ssh is a companion to git-profile.",
-			"Profiles store which SSH key to use; `use` sets core.sshCommand",
-			"in the current repo so remotes can stay on github.com.",
+			"Profiles store which SSH key + GitHub user to use.",
+			"`use` sets core.sshCommand and wires origin to",
+			"git@github.com:<user>/<repo>.git so Orca/ADE keeps working.",
 			"",
 			"Typical pairing:",
-			"  git-profile use work",
-			"  git-ssh use work",
+			"  git-profile use alice",
+			"  git-ssh use alice",
 		),
 		SilenceUsage: true,
 	}
@@ -112,14 +113,15 @@ func (r *Root) saveConfig() error {
 func (r *Root) addCmd() *cobra.Command {
 	var identity string
 	var alias string
+	var githubUser string
 	var sets []string
 
 	cmd := &cobra.Command{
 		Use:   "add <profile>",
 		Short: "Add or update a profile",
 		Example: multiline(
-			`git-ssh add alice --identity ~/.ssh/alice/id_ed25519`,
-			`git-ssh add work --identity ~/.github/work/id_ed25519 --alias git-ssh.work`,
+			`git-ssh add alice --identity ~/.ssh/alice/id_ed25519 --github-user alice`,
+			`git-ssh add bob --identity ~/.ssh/bob/id_ed25519 --github-user bob`,
 		),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -130,6 +132,9 @@ func (r *Root) addCmd() *cobra.Command {
 			}
 			if alias != "" {
 				profile.HostAlias = alias
+			}
+			if githubUser != "" {
+				profile.GithubUser = githubUser
 			}
 			if profile.IdentityFile == "" {
 				return fmt.Errorf("--identity is required for new profiles")
@@ -165,6 +170,7 @@ func (r *Root) addCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to private key")
+	cmd.Flags().StringVarP(&githubUser, "github-user", "u", "", "GitHub username/owner for origin remotes")
 	cmd.Flags().StringVar(&alias, "alias", "", "optional SSH Host alias (not github.com)")
 	cmd.Flags().StringArrayVar(&sets, "set", nil, "extra SSH config Key=Value")
 	return cmd
@@ -192,7 +198,7 @@ func (r *Root) listCmd() *cobra.Command {
 				if name == current {
 					mark = "*"
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s %s\t%s\n", mark, name, p.IdentityFile)
+				fmt.Fprintf(cmd.OutOrStdout(), "%s %s\t%s\t%s\n", mark, name, p.GithubUser, p.IdentityFile)
 			}
 			return nil
 		},
@@ -211,6 +217,9 @@ func (r *Root) showCmd() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "profile: %s\n", args[0])
 			fmt.Fprintf(cmd.OutOrStdout(), "identity_file: %s\n", p.IdentityFile)
+			if p.GithubUser != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "github_user: %s\n", p.GithubUser)
+			}
 			if p.HostAlias != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "host_alias: %s\n", p.HostAlias)
 			}
@@ -244,27 +253,59 @@ func (r *Root) delCmd() *cobra.Command {
 }
 
 func (r *Root) useCmd() *cobra.Command {
-	return &cobra.Command{
+	var repoName string
+	var noRemote bool
+
+	cmd := &cobra.Command{
 		Use:   "use <profile>",
-		Short: "Apply profile to this git repo (core.sshCommand)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Apply profile key + origin remote to this git repo",
+		Long: multiline(
+			"Sets core.sshCommand to the profile's private key (Orca-safe).",
+			"If origin is missing and the profile has github_user, creates:",
+			"  git@github.com:<github_user>/<repo>.git",
+			"Repo name defaults to the directory name; override with --repo.",
+			"Existing github.com / *.github.com remotes are normalized onto github.com.",
+		),
+		Example: multiline(
+			`git-ssh use alice`,
+			`git-ssh use alice --repo certatlas`,
+			`git-ssh use alice --no-remote`,
+		),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			p, ok := r.cfg.Lookup(name)
 			if !ok {
 				return fmt.Errorf("profile %q not found", name)
 			}
-			if err := apply.Use(r.git, name, p); err != nil {
+			result, err := apply.Use(r.git, name, p, apply.Options{
+				RepoName: repoName,
+				NoRemote: noRemote,
+			})
+			if err != nil {
 				return err
 			}
 			if err := include.WriteProfile(name, p); err != nil {
 				return fmt.Errorf("applied locally but include write failed: %w", err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Using profile %q in this repository\n", name)
-			fmt.Fprintln(cmd.OutOrStdout(), "Remotes can stay on github.com (Orca/ADE safe).")
+			fmt.Fprintf(cmd.OutOrStdout(), "Using profile %q\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "  ssh: %s\n", result.SSHCommand)
+			switch result.RemoteAction {
+			case "added":
+				fmt.Fprintf(cmd.OutOrStdout(), "  origin: added %s\n", result.RemoteURL)
+			case "updated":
+				fmt.Fprintf(cmd.OutOrStdout(), "  origin: updated %s\n", result.RemoteURL)
+			case "unchanged":
+				fmt.Fprintf(cmd.OutOrStdout(), "  origin: %s\n", result.RemoteURL)
+			case "skipped":
+				fmt.Fprintln(cmd.OutOrStdout(), "  origin: skipped")
+			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&repoName, "repo", "", "repo name for new origin (default: directory name)")
+	cmd.Flags().BoolVar(&noRemote, "no-remote", false, "only set SSH key; do not create/update origin")
+	return cmd
 }
 
 func (r *Root) unuseCmd() *cobra.Command {
