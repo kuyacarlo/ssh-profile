@@ -27,6 +27,26 @@ func OriginURL(githubUser, repo string) (string, error) {
 	return fmt.Sprintf("git@github.com:%s/%s.git", user, repo), nil
 }
 
+// ResolveTarget turns "demo-repo" or "example-org/demo-repo" into an origin URL.
+// Bare repo names use defaultOwner (profile github_user).
+func ResolveTarget(defaultOwner, target string) (string, error) {
+	target = strings.TrimSpace(target)
+	target = strings.TrimSuffix(target, ".git")
+	if target == "" {
+		return "", fmt.Errorf("empty remote target")
+	}
+	if strings.Contains(target, "/") {
+		owner, repo, ok := strings.Cut(target, "/")
+		owner = strings.TrimSpace(owner)
+		repo = strings.TrimSpace(repo)
+		if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
+			return "", fmt.Errorf("invalid target %q (want repo or owner/repo)", target)
+		}
+		return OriginURL(owner, repo)
+	}
+	return OriginURL(defaultOwner, target)
+}
+
 // ParseOwnerRepo extracts owner/repo from common GitHub remote forms.
 // Accepts github.com and *.github.com Host aliases.
 func ParseOwnerRepo(remote string) (owner, repo string, ok bool) {

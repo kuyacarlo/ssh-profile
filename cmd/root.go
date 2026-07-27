@@ -253,33 +253,40 @@ func (r *Root) delCmd() *cobra.Command {
 }
 
 func (r *Root) useCmd() *cobra.Command {
-	var repoName string
 	var noRemote bool
 
 	cmd := &cobra.Command{
-		Use:   "use <profile>",
+		Use:   "use <profile> [repo|owner/repo]",
 		Short: "Apply profile key + origin remote to this git repo",
 		Long: multiline(
 			"Sets core.sshCommand to the profile's private key (Orca-safe).",
-			"If origin is missing and the profile has github_user, creates:",
-			"  git@github.com:<github_user>/<repo>.git",
-			"Repo name defaults to the directory name; override with --repo.",
-			"Existing github.com / *.github.com remotes are normalized onto github.com.",
+			"",
+			"Remote target (optional 2nd arg):",
+			"  demo-repo              → git@github.com:<github_user>/demo-repo.git",
+			"  example-org/demo-repo    → git@github.com:example-org/demo-repo.git",
+			"",
+			"With no 2nd arg: create origin from directory name, or normalize an",
+			"existing github.com / *.github.com remote onto github.com.",
 		),
 		Example: multiline(
 			`git-ssh use alice`,
-			`git-ssh use alice --repo certatlas`,
+			`git-ssh use alice demo-repo`,
+			`git-ssh use alice example-org/demo-repo`,
 			`git-ssh use alice --no-remote`,
 		),
-		Args: cobra.ExactArgs(1),
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			target := ""
+			if len(args) == 2 {
+				target = args[1]
+			}
 			p, ok := r.cfg.Lookup(name)
 			if !ok {
 				return fmt.Errorf("profile %q not found", name)
 			}
 			result, err := apply.Use(r.git, name, p, apply.Options{
-				RepoName: repoName,
+				Target:   target,
 				NoRemote: noRemote,
 			})
 			if err != nil {
@@ -303,7 +310,6 @@ func (r *Root) useCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&repoName, "repo", "", "repo name for new origin (default: directory name)")
 	cmd.Flags().BoolVar(&noRemote, "no-remote", false, "only set SSH key; do not create/update origin")
 	return cmd
 }

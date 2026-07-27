@@ -31,14 +31,17 @@ type VCS interface {
 
 // Options controls remote wiring during Use.
 type Options struct {
-	RepoName string // override directory basename for new origin
-	NoRemote bool   // skip origin create/normalize
+	// Target is "demo-repo" or "owner/repo" (e.g. example-org/demo-repo).
+	// When set, origin is created/updated to that GitHub URL.
+	Target string
+	// NoRemote skips origin create/update/normalize.
+	NoRemote bool
 }
 
 // Result describes what Use changed.
 type Result struct {
-	SSHCommand string
-	RemoteURL  string
+	SSHCommand   string
+	RemoteURL    string
 	RemoteAction string // "added", "updated", "unchanged", "skipped"
 }
 
@@ -85,7 +88,7 @@ func Use(vcs VCS, name string, profile config.Profile, opts Options) (Result, er
 		return result, nil
 	}
 
-	remoteURL, action, err := ensureOrigin(vcs, profile, opts.RepoName)
+	remoteURL, action, err := ensureOrigin(vcs, profile, opts.Target)
 	if err != nil {
 		return result, err
 	}
@@ -94,7 +97,34 @@ func Use(vcs VCS, name string, profile config.Profile, opts Options) (Result, er
 	return result, nil
 }
 
-func ensureOrigin(vcs VCS, profile config.Profile, repoOverride string) (string, string, error) {
+func ensureOrigin(vcs VCS, profile config.Profile, target string) (string, string, error) {
+	target = strings.TrimSpace(target)
+
+	// Explicit target always wins (folder name irrelevant).
+	if target != "" {
+		url, err := remoteurl.ResolveTarget(profile.GithubUser, target)
+		if err != nil {
+			return "", "", err
+		}
+		had := vcs.HasRemote(Origin)
+		if had {
+			current, err := vcs.GetRemote(Origin)
+			if err != nil {
+				return "", "", err
+			}
+			if current == url {
+				return url, "unchanged", nil
+			}
+		}
+		if err := vcs.EnsureRemote(Origin, url); err != nil {
+			return "", "", err
+		}
+		if had {
+			return url, "updated", nil
+		}
+		return url, "added", nil
+	}
+
 	if vcs.HasRemote(Origin) {
 		current, err := vcs.GetRemote(Origin)
 		if err != nil {
@@ -102,7 +132,6 @@ func ensureOrigin(vcs VCS, profile config.Profile, repoOverride string) (string,
 		}
 		normalized, ok := remoteurl.NormalizeGitHub(current)
 		if !ok {
-			// Keep non-GitHub remotes (e.g. forge); identity still applies via sshCommand for github pushes only if they add one later.
 			return current, "unchanged", nil
 		}
 		if normalized == current {
@@ -116,19 +145,14 @@ func ensureOrigin(vcs VCS, profile config.Profile, repoOverride string) (string,
 
 	user := strings.TrimSpace(profile.GithubUser)
 	if user == "" {
-		return "", "skipped", fmt.Errorf("no origin remote and profile has no github_user; re-add with --github-user or pass --repo after setting github_user")
+		return "", "skipped", fmt.Errorf("no origin remote and profile has no github_user; re-add with --github-user or pass a repo target")
 	}
 
-	repo := strings.TrimSpace(repoOverride)
-	if repo == "" {
-		top, err := vcs.TopLevel()
-		if err != nil {
-			return "", "", err
-		}
-		repo = remoteurl.RepoNameFromPath(top)
+	top, err := vcs.TopLevel()
+	if err != nil {
+		return "", "", err
 	}
-
-	url, err := remoteurl.OriginURL(user, repo)
+	url, err := remoteurl.OriginURL(user, remoteurl.RepoNameFromPath(top))
 	if err != nil {
 		return "", "", err
 	}

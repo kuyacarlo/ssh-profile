@@ -87,6 +87,46 @@ func TestUseAddsOrigin(t *testing.T) {
 	is.Equal(vcs.kv[ProfileKey], "alice")
 }
 
+func TestUseExplicitRepoTarget(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	vcs := &fakeVCS{
+		repo:    true,
+		top:     filepath.Join(dir, "some-folder"),
+		kv:      map[string]string{},
+		remotes: map[string]string{},
+	}
+	profile := config.Profile{IdentityFile: key, GithubUser: "alice"}
+
+	result, err := Use(vcs, "alice", profile, Options{Target: "demo-repo"})
+	is.NoErr(err)
+	is.Equal(result.RemoteAction, "added")
+	is.Equal(result.RemoteURL, "git@github.com:alice/demo-repo.git")
+}
+
+func TestUseOrgRepoTargetUpdatesOrigin(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	vcs := &fakeVCS{
+		repo: true,
+		top:  dir,
+		kv:   map[string]string{},
+		remotes: map[string]string{
+			"origin": "git@github.com:alice/test1.git",
+		},
+	}
+	result, err := Use(vcs, "alice", config.Profile{IdentityFile: key, GithubUser: "alice"}, Options{Target: "example-org/demo-repo"})
+	is.NoErr(err)
+	is.Equal(result.RemoteAction, "updated")
+	is.Equal(vcs.remotes["origin"], "git@github.com:example-org/demo-repo.git")
+}
+
 func TestUseNormalizesAliasRemote(t *testing.T) {
 	is := is.New(t)
 	dir := t.TempDir()
