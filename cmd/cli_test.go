@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/adrg/xdg"
 	"github.com/matryer/is"
 )
 
@@ -19,6 +20,15 @@ func writeTestKey(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func withTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	xdg.Reload()
+	return home
 }
 
 func TestVersionCommand(t *testing.T) {
@@ -35,11 +45,31 @@ func TestVersionCommand(t *testing.T) {
 	is.True(strings.Contains(buf.String(), "git-ssh 9.9.9 (abc) today"))
 }
 
+func TestAddAutoKeyDefaults(t *testing.T) {
+	is := is.New(t)
+	home := withTestHome(t)
+
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	root := New()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetArgs([]string{"-c", cfg, "add", "alice"})
+	is.NoErr(root.Command.Execute())
+
+	text := out.String()
+	is.True(strings.Contains(text, "Successfully added"))
+	is.True(strings.Contains(text, "github_user: alice"))
+	is.True(strings.Contains(text, "key: created"))
+	is.True(strings.Contains(text, "ssh-ed25519"))
+
+	key := filepath.Join(home, ".ssh", "git-ssh", "alice", "id_ed25519")
+	_, err := os.Stat(key)
+	is.NoErr(err)
+}
+
 func TestAddListExportMissing(t *testing.T) {
 	is := is.New(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	withTestHome(t)
 
 	cfg := filepath.Join(t.TempDir(), "config.json")
 	key := writeTestKey(t, t.TempDir())
@@ -78,19 +108,22 @@ func TestAddListExportMissing(t *testing.T) {
 
 func TestUseRequiresGitRepo(t *testing.T) {
 	is := is.New(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	withTestHome(t)
 
 	cfg := filepath.Join(t.TempDir(), "config.json")
 	key := writeTestKey(t, t.TempDir())
 
 	root := New()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
 	root.SetArgs([]string{"-c", cfg, "add", "alice", "--identity", key, "--github-user", "alice"})
 	is.NoErr(root.Command.Execute())
 
 	workdir := t.TempDir()
 	root = New()
+	errBuf := &bytes.Buffer{}
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(errBuf)
 	root.SetArgs([]string{"-c", cfg, "use", "alice"})
 	// Execute from a non-repo directory.
 	wd, err := os.Getwd()
@@ -105,14 +138,14 @@ func TestUseRequiresGitRepo(t *testing.T) {
 
 func TestUseAndCurrentInRepo(t *testing.T) {
 	is := is.New(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	withTestHome(t)
 
 	cfg := filepath.Join(t.TempDir(), "config.json")
 	key := writeTestKey(t, t.TempDir())
 
 	root := New()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
 	root.SetArgs([]string{"-c", cfg, "add", "alice", "--identity", key, "--github-user", "alice"})
 	is.NoErr(root.Command.Execute())
 
@@ -130,6 +163,7 @@ func TestUseAndCurrentInRepo(t *testing.T) {
 	out := &bytes.Buffer{}
 	root = New()
 	root.SetOut(out)
+	root.SetErr(&bytes.Buffer{})
 	root.SetArgs([]string{"-c", cfg, "use", "alice", "demo-repo"})
 	is.NoErr(root.Command.Execute())
 	is.True(strings.Contains(out.String(), "git@github.com:alice/demo-repo.git"))
@@ -137,6 +171,7 @@ func TestUseAndCurrentInRepo(t *testing.T) {
 	out.Reset()
 	root = New()
 	root.SetOut(out)
+	root.SetErr(&bytes.Buffer{})
 	root.SetArgs([]string{"-c", cfg, "current"})
 	is.NoErr(root.Command.Execute())
 	is.Equal(strings.TrimSpace(out.String()), "alice")

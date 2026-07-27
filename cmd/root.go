@@ -10,6 +10,7 @@ import (
 	"github.com/ssh-profiles/git-ssh/internal/config"
 	"github.com/ssh-profiles/git-ssh/internal/git"
 	"github.com/ssh-profiles/git-ssh/internal/include"
+	"github.com/ssh-profiles/git-ssh/internal/keys"
 	"github.com/ssh-profiles/git-ssh/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -41,18 +42,25 @@ func New() *Root {
 		Use:   "git-ssh",
 		Short: "Per-repo SSH identity profiles for GitHub (Orca-safe)",
 		Long: multiline(
-			"git-ssh is a companion to git-profile.",
-			"Profiles store which SSH key + GitHub user to use.",
-			"`use` sets core.sshCommand and wires origin to",
-			"git@github.com:<user>/<repo>.git so Orca/ADE keeps working.",
+			"Per-repo SSH keys for GitHub without Host aliases (Orca-safe).",
 			"",
-			"Typical pairing (same profile name):",
+			"Layout:",
+			"  ~/.config/git-ssh/config.json     profile store",
+			"  ~/.ssh/git-ssh/<profile>/id_ed25519   managed keys",
+			"",
+			"github_user is the default GitHub owner used when wiring origin",
+			"(bare `demo-repo` → git@github.com:<github_user>/demo-repo.git).",
+			"It defaults to the profile name.",
+			"",
+			"Lifetime defaults (once per account, then forever):",
+			"  git-ssh add alice",
+			"  git-ssh clone alice private-repo",
+			"  git-ssh use alice                 # existing checkout",
+			"",
+			"Pairs with git-profile under the same name:",
 			"  git-profile use alice",
 			"  git-ssh use alice",
-			"",
-			"Active markers in the repo:",
-			"  current-profile.name  ← git-profile",
-			"  current-profile.ssh   ← git-ssh",
+			"Markers: current-profile.name (git-profile), current-profile.ssh (git-ssh).",
 		),
 		SilenceUsage: true,
 	}
@@ -76,6 +84,7 @@ func New() *Root {
 		r.showCmd(),
 		r.delCmd(),
 		r.useCmd(),
+		r.cloneCmd(),
 		r.unuseCmd(),
 		r.currentCmd(),
 		r.exportCmd(),
@@ -127,11 +136,19 @@ func (r *Root) addCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "add [profile]",
 		Aliases: []string{"set"},
-		Short:   "Add or update a profile",
-		Long:    "Add interactively, or pass flags for a named profile.",
+		Short:   "Add or update a profile (auto key + github_user)",
+		Long: multiline(
+			"Defaults that stick:",
+			"  github_user  = profile name (override with --github-user)",
+			"  identity     = ~/.ssh/git-ssh/<profile>/id_ed25519",
+			"                 (created with ssh-keygen -t ed25519 if missing)",
+			"",
+			"Pass --identity only when reusing an existing key outside the managed tree.",
+		),
 		Example: multiline(
-			`git-ssh add`,
-			`git-ssh add alice --identity ~/.ssh/alice/id_ed25519 --github-user alice`,
+			`git-ssh add alice`,
+			`git-ssh add work --github-user acme-bot`,
+			`git-ssh add alice --identity ~/.ssh/other/id_ed25519`,
 		),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -149,8 +166,9 @@ func (r *Root) addCmd() *cobra.Command {
 			if githubUser != "" {
 				profile.GithubUser = githubUser
 			}
-			if profile.IdentityFile == "" {
-				return fmt.Errorf("--identity is required for new profiles (or run `git-ssh add` interactively)")
+			createdKey, err := r.fillProfileDefaults(name, &profile)
+			if err != nil {
+				return err
 			}
 			if len(sets) > 0 {
 				if profile.Config == nil {
@@ -164,12 +182,12 @@ func (r *Root) addCmd() *cobra.Command {
 					profile.Config[strings.TrimSpace(key)] = strings.TrimSpace(value)
 				}
 			}
-			return r.saveProfile(cmd, name, profile, !exists)
+			return r.saveProfile(cmd, name, profile, !exists, createdKey)
 		},
 	}
 
-	cmd.Flags().StringVarP(&identity, "identity", "i", "", "path to private key")
-	cmd.Flags().StringVarP(&githubUser, "github-user", "u", "", "GitHub username/owner for origin remotes")
+	cmd.Flags().StringVarP(&identity, "identity", "i", "", "private key path (default: managed ~/.ssh/git-ssh/<profile>/id_ed25519)")
+	cmd.Flags().StringVarP(&githubUser, "github-user", "u", "", "GitHub owner for origin remotes (default: profile name)")
 	cmd.Flags().StringVar(&alias, "alias", "", "optional SSH Host alias (not github.com)")
 	cmd.Flags().StringArrayVar(&sets, "set", nil, "extra SSH config Key=Value")
 	return cmd
@@ -185,10 +203,14 @@ func (r *Root) addInteractive(cmd *cobra.Command) error {
 		return err
 	}
 	existing, _ := r.cfg.Lookup(name)
+	githubDefault := existing.GithubUser
+	if githubDefault == "" {
+		githubDefault = name
+	}
 	form, err := ui.PromptProfileFields(ui.ProfileFormData{
 		Profile:      name,
 		IdentityFile: existing.IdentityFile,
-		GithubUser:   existing.GithubUser,
+		GithubUser:   githubDefault,
 		HostAlias:    existing.HostAlias,
 	}, cmd.InOrStdin(), cmd.OutOrStdout())
 	if err != nil {
@@ -198,20 +220,38 @@ func (r *Root) addInteractive(cmd *cobra.Command) error {
 		}
 		return err
 	}
-	if form.IdentityFile == "" {
-		return fmt.Errorf("identity_file is required")
-	}
 	profile := config.Profile{
 		IdentityFile: form.IdentityFile,
 		GithubUser:   form.GithubUser,
 		HostAlias:    form.HostAlias,
 		Config:       existing.Config,
 	}
+	createdKey, err := r.fillProfileDefaults(name, &profile)
+	if err != nil {
+		return err
+	}
 	_, existed := r.cfg.Lookup(name)
-	return r.saveProfile(cmd, name, profile, !existed)
+	return r.saveProfile(cmd, name, profile, !existed, createdKey)
 }
 
-func (r *Root) saveProfile(cmd *cobra.Command, name string, profile config.Profile, isNew bool) error {
+// fillProfileDefaults sets github_user from the profile name and ensures a
+// managed ed25519 key when identity_file is empty.
+func (r *Root) fillProfileDefaults(name string, profile *config.Profile) (createdKey bool, err error) {
+	if strings.TrimSpace(profile.GithubUser) == "" {
+		profile.GithubUser = name
+	}
+	if strings.TrimSpace(profile.IdentityFile) != "" {
+		return false, nil
+	}
+	path, created, err := keys.EnsureEd25519(name)
+	if err != nil {
+		return false, err
+	}
+	profile.IdentityFile = path
+	return created, nil
+}
+
+func (r *Root) saveProfile(cmd *cobra.Command, name string, profile config.Profile, isNew, createdKey bool) error {
 	if err := r.cfg.Store(name, profile); err != nil {
 		return err
 	}
@@ -226,7 +266,27 @@ func (r *Root) saveProfile(cmd *cobra.Command, name string, profile config.Profi
 		action = "Successfully added"
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s `%s` profile.\n", action, name)
+	fmt.Fprintf(cmd.OutOrStdout(), "  github_user: %s\n", profile.GithubUser)
+	fmt.Fprintf(cmd.OutOrStdout(), "  identity: %s\n", profile.IdentityFile)
+	if createdKey {
+		fmt.Fprintln(cmd.OutOrStdout(), "  key: created (ed25519, empty passphrase)")
+	}
+	if pub := publicKeyLine(name, profile.IdentityFile); pub != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "  public key (add to GitHub → SSH keys):")
+		fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", pub)
+	}
 	return nil
+}
+
+func publicKeyLine(profile, identityFile string) string {
+	if pub, err := keys.ReadPublicKey(profile); err == nil && pub != "" {
+		return pub
+	}
+	body, err := os.ReadFile(identityFile + ".pub") //nolint:gosec
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
 }
 
 func (r *Root) listCmd() *cobra.Command {

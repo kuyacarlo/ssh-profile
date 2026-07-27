@@ -67,8 +67,8 @@ func PromptProfileFields(initial ProfileFormData, in io.Reader, out io.Writer) (
 	result := initial
 	form := huh.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("IdentityFile (~/.github/.../id_ed25519)").Value(&result.IdentityFile),
-			huh.NewInput().Title("GitHub user/owner (for origin remotes)").Value(&result.GithubUser),
+			huh.NewInput().Title("IdentityFile (empty = auto ~/.ssh/git-ssh/<profile>/id_ed25519)").Value(&result.IdentityFile),
+			huh.NewInput().Title("GitHub user/owner for origin (empty = profile name)").Value(&result.GithubUser),
 			huh.NewInput().Title("Optional Host alias (not github.com)").Value(&result.HostAlias),
 		),
 	).WithInput(in).WithOutput(out)
