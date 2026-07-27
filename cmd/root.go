@@ -10,6 +10,7 @@ import (
 	"github.com/ssh-profiles/git-ssh/internal/config"
 	"github.com/ssh-profiles/git-ssh/internal/git"
 	"github.com/ssh-profiles/git-ssh/internal/include"
+	"github.com/ssh-profiles/git-ssh/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -45,9 +46,13 @@ func New() *Root {
 			"`use` sets core.sshCommand and wires origin to",
 			"git@github.com:<user>/<repo>.git so Orca/ADE keeps working.",
 			"",
-			"Typical pairing:",
+			"Typical pairing (same profile name):",
 			"  git-profile use alice",
 			"  git-ssh use alice",
+			"",
+			"Active markers in the repo:",
+			"  current-profile.name  ← git-profile",
+			"  current-profile.ssh   ← git-ssh",
 		),
 		SilenceUsage: true,
 	}
@@ -73,8 +78,11 @@ func New() *Root {
 		r.useCmd(),
 		r.unuseCmd(),
 		r.currentCmd(),
+		r.exportCmd(),
+		r.importCmd(),
 		r.backupCmd(),
 		r.restoreCmd(),
+		r.completionCmd(),
 		r.versionCmd(),
 	)
 
@@ -117,14 +125,19 @@ func (r *Root) addCmd() *cobra.Command {
 	var sets []string
 
 	cmd := &cobra.Command{
-		Use:   "add <profile>",
-		Short: "Add or update a profile",
+		Use:     "add [profile]",
+		Aliases: []string{"set"},
+		Short:   "Add or update a profile",
+		Long:    "Add interactively, or pass flags for a named profile.",
 		Example: multiline(
+			`git-ssh add`,
 			`git-ssh add alice --identity ~/.ssh/alice/id_ed25519 --github-user alice`,
-			`git-ssh add bob --identity ~/.ssh/bob/id_ed25519 --github-user bob`,
 		),
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return r.addInteractive(cmd)
+			}
 			name := args[0]
 			profile, exists := r.cfg.Lookup(name)
 			if identity != "" {
@@ -137,7 +150,7 @@ func (r *Root) addCmd() *cobra.Command {
 				profile.GithubUser = githubUser
 			}
 			if profile.IdentityFile == "" {
-				return fmt.Errorf("--identity is required for new profiles")
+				return fmt.Errorf("--identity is required for new profiles (or run `git-ssh add` interactively)")
 			}
 			if len(sets) > 0 {
 				if profile.Config == nil {
@@ -151,21 +164,7 @@ func (r *Root) addCmd() *cobra.Command {
 					profile.Config[strings.TrimSpace(key)] = strings.TrimSpace(value)
 				}
 			}
-			if err := r.cfg.Store(name, profile); err != nil {
-				return err
-			}
-			if err := r.saveConfig(); err != nil {
-				return err
-			}
-			if err := include.WriteProfile(name, profile); err != nil {
-				return fmt.Errorf("profile saved but include write failed: %w", err)
-			}
-			action := "Updated"
-			if !exists {
-				action = "Added"
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s profile %q\n", action, name)
-			return nil
+			return r.saveProfile(cmd, name, profile, !exists)
 		},
 	}
 
@@ -176,14 +175,67 @@ func (r *Root) addCmd() *cobra.Command {
 	return cmd
 }
 
+func (r *Root) addInteractive(cmd *cobra.Command) error {
+	name, err := ui.PromptProfileName(cmd.InOrStdin(), cmd.OutOrStdout())
+	if err != nil {
+		if ui.IsAborted(err) {
+			fmt.Fprintln(cmd.ErrOrStderr(), "Interactive add cancelled.")
+			return nil
+		}
+		return err
+	}
+	existing, _ := r.cfg.Lookup(name)
+	form, err := ui.PromptProfileFields(ui.ProfileFormData{
+		Profile:      name,
+		IdentityFile: existing.IdentityFile,
+		GithubUser:   existing.GithubUser,
+		HostAlias:    existing.HostAlias,
+	}, cmd.InOrStdin(), cmd.OutOrStdout())
+	if err != nil {
+		if ui.IsAborted(err) {
+			fmt.Fprintln(cmd.ErrOrStderr(), "Interactive add cancelled.")
+			return nil
+		}
+		return err
+	}
+	if form.IdentityFile == "" {
+		return fmt.Errorf("identity_file is required")
+	}
+	profile := config.Profile{
+		IdentityFile: form.IdentityFile,
+		GithubUser:   form.GithubUser,
+		HostAlias:    form.HostAlias,
+		Config:       existing.Config,
+	}
+	_, existed := r.cfg.Lookup(name)
+	return r.saveProfile(cmd, name, profile, !existed)
+}
+
+func (r *Root) saveProfile(cmd *cobra.Command, name string, profile config.Profile, isNew bool) error {
+	if err := r.cfg.Store(name, profile); err != nil {
+		return err
+	}
+	if err := r.saveConfig(); err != nil {
+		return err
+	}
+	if err := include.WriteProfile(name, profile); err != nil {
+		return fmt.Errorf("profile saved but include write failed: %w", err)
+	}
+	action := "Successfully updated"
+	if isNew {
+		action = "Successfully added"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s `%s` profile.\n", action, name)
+	return nil
+}
+
 func (r *Root) listCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List profiles",
+		Use:     "list",
+		Aliases: []string{"l"},
+		Short:   "List profiles",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			names := r.cfg.Names()
-			if len(names) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No profiles.")
+			if !r.checkProfiles(cmd) {
 				return nil
 			}
 			current := ""
@@ -192,7 +244,7 @@ func (r *Root) listCmd() *cobra.Command {
 					current = name
 				}
 			}
-			for _, name := range names {
+			for _, name := range r.cfg.Names() {
 				p, _ := r.cfg.Lookup(name)
 				mark := " "
 				if name == current {
@@ -207,15 +259,32 @@ func (r *Root) listCmd() *cobra.Command {
 
 func (r *Root) showCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "show <profile>",
+		Use:   "show [profile]",
 		Short: "Show a profile",
-		Args:  cobra.ExactArgs(1),
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, ok := r.cfg.Lookup(args[0])
-			if !ok {
-				return fmt.Errorf("profile %q not found", args[0])
+			if !r.checkProfiles(cmd) {
+				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "profile: %s\n", args[0])
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			} else {
+				selected, err := ui.SelectProfile(r.cfg.Names(), cmd.InOrStdin(), cmd.OutOrStdout())
+				if err != nil {
+					if ui.IsAborted(err) {
+						return nil
+					}
+					return err
+				}
+				name = selected
+			}
+			p, ok := r.cfg.Lookup(name)
+			if !ok {
+				r.exitMissingProfile(cmd, name)
+				return nil
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "profile: %s\n", name)
 			fmt.Fprintf(cmd.OutOrStdout(), "identity_file: %s\n", p.IdentityFile)
 			if p.GithubUser != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "github_user: %s\n", p.GithubUser)
@@ -233,20 +302,37 @@ func (r *Root) showCmd() *cobra.Command {
 
 func (r *Root) delCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "del <profile>",
+		Use:     "del [profile]",
 		Aliases: []string{"rm", "delete"},
 		Short:   "Delete a profile",
-		Args:    cobra.ExactArgs(1),
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			if !r.checkProfiles(cmd) {
+				return nil
+			}
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			} else {
+				selected, err := ui.SelectProfile(r.cfg.Names(), cmd.InOrStdin(), cmd.OutOrStdout())
+				if err != nil {
+					if ui.IsAborted(err) {
+						fmt.Fprintln(cmd.ErrOrStderr(), "Interactive del cancelled.")
+						return nil
+					}
+					return err
+				}
+				name = selected
+			}
 			if !r.cfg.DeleteProfile(name) {
-				return fmt.Errorf("profile %q not found", name)
+				r.exitMissingProfile(cmd, name)
+				return nil
 			}
 			if err := r.saveConfig(); err != nil {
 				return err
 			}
 			_ = include.RemoveProfile(name)
-			fmt.Fprintf(cmd.OutOrStdout(), "Deleted profile %q\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Successfully deleted `%s` profile.\n", name)
 			return nil
 		},
 	}
@@ -256,34 +342,60 @@ func (r *Root) useCmd() *cobra.Command {
 	var noRemote bool
 
 	cmd := &cobra.Command{
-		Use:   "use <profile> [repo|owner/repo]",
-		Short: "Apply profile key + origin remote to this git repo",
+		Use:     "use [profile] [repo|owner/repo]",
+		Aliases: []string{"u"},
+		Short:   "Apply profile key + origin remote to this git repo",
 		Long: multiline(
 			"Sets core.sshCommand to the profile's private key (Orca-safe).",
+			"Records current-profile.ssh (pairs with git-profile's current-profile.name).",
 			"",
 			"Remote target (optional 2nd arg):",
 			"  demo-repo              → git@github.com:<github_user>/demo-repo.git",
 			"  example-org/demo-repo    → git@github.com:example-org/demo-repo.git",
 			"",
-			"With no 2nd arg: create origin from directory name, or normalize an",
-			"existing github.com / *.github.com remote onto github.com.",
+			"With no args: interactive profile select.",
+			"With no 2nd arg: origin from directory name, or normalize existing GitHub remote.",
 		),
 		Example: multiline(
+			`git-ssh use`,
 			`git-ssh use alice`,
 			`git-ssh use alice demo-repo`,
 			`git-ssh use alice example-org/demo-repo`,
 			`git-ssh use alice --no-remote`,
 		),
-		Args: cobra.RangeArgs(1, 2),
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
+			if !r.checkRepo(cmd) {
+				os.Exit(1)
+			}
+			if !r.checkProfiles(cmd) {
+				return nil
+			}
+
+			name := ""
 			target := ""
-			if len(args) == 2 {
+			switch len(args) {
+			case 0:
+				selected, err := ui.SelectProfile(r.cfg.Names(), cmd.InOrStdin(), cmd.OutOrStdout())
+				if err != nil {
+					if ui.IsAborted(err) {
+						fmt.Fprintln(cmd.ErrOrStderr(), "Interactive use cancelled.")
+						return nil
+					}
+					return fmt.Errorf("unable to select a profile: %w", err)
+				}
+				name = selected
+			case 1:
+				name = args[0]
+			case 2:
+				name = args[0]
 				target = args[1]
 			}
+
 			p, ok := r.cfg.Lookup(name)
 			if !ok {
-				return fmt.Errorf("profile %q not found", name)
+				r.exitMissingProfile(cmd, name)
+				return nil
 			}
 			result, err := apply.Use(r.git, name, p, apply.Options{
 				Target:   target,
@@ -295,7 +407,7 @@ func (r *Root) useCmd() *cobra.Command {
 			if err := include.WriteProfile(name, p); err != nil {
 				return fmt.Errorf("applied locally but include write failed: %w", err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Using profile %q\n", name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Successfully applied `%s` profile to current git repository.\n", name)
 			fmt.Fprintf(cmd.OutOrStdout(), "  ssh: %s\n", result.SSHCommand)
 			switch result.RemoteAction {
 			case "added":
@@ -316,14 +428,18 @@ func (r *Root) useCmd() *cobra.Command {
 
 func (r *Root) unuseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unuse",
-		Short: "Clear git-ssh settings from this git repo",
-		Args:  cobra.NoArgs,
+		Use:     "unuse",
+		Aliases: []string{"uu"},
+		Short:   "Clear git-ssh settings from this git repo",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !r.checkRepo(cmd) {
+				os.Exit(1)
+			}
 			if err := apply.Unuse(r.git); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "Cleared git-ssh profile from this repository")
+			fmt.Fprintln(cmd.OutOrStdout(), "Successfully removed git-ssh profile from current git repository.")
 			return nil
 		},
 	}
@@ -331,13 +447,18 @@ func (r *Root) unuseCmd() *cobra.Command {
 
 func (r *Root) currentCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "current",
-		Short: "Show active profile in this git repo",
-		Args:  cobra.NoArgs,
+		Use:     "current",
+		Aliases: []string{"c"},
+		Short:   "Show active profile in this git repo",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !r.checkRepo(cmd) {
+				os.Exit(1)
+			}
 			name, err := apply.Current(r.git)
 			if err != nil || name == "" {
-				fmt.Fprintln(cmd.OutOrStdout(), "No git-ssh profile active in this repository")
+				// Mirror git-profile: empty => default
+				fmt.Fprintln(cmd.OutOrStdout(), "default")
 				return nil
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), name)

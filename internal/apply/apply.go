@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	// ProfileKey records which git-ssh profile is active in the repo.
-	ProfileKey = "git-ssh.profile"
+	// ProfileKey records which git-ssh profile is active (pairs with
+	// git-profile's current-profile.name).
+	ProfileKey = "current-profile.ssh"
 	SSHCommand = "core.sshCommand"
 	Origin     = "origin"
 )
@@ -171,7 +172,12 @@ func Unuse(vcs VCS) error {
 	if err := vcs.Unset(SSHCommand); err != nil {
 		return err
 	}
-	return vcs.Unset(ProfileKey)
+	if err := vcs.Unset(ProfileKey); err != nil {
+		return err
+	}
+	// Legacy marker from earlier git-ssh builds.
+	_ = vcs.Unset("git-ssh.profile")
+	return nil
 }
 
 // Current returns the active profile name, if any.
