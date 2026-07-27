@@ -1,0 +1,119 @@
+# Sync packaging/copr/git-ssh.spec with a release tag and submit a Copr build.
+name: Copr build
+
+permissions:
+  contents: write
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without v prefix (default latest GitHub release)
+        required: false
+        type: string
+
+env:
+  COPR_PROJECT: kuya-carlo/git-ssh
+  SPEC: packaging/copr/git-ssh.spec
+
+jobs:
+  copr:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    steps:
+      - name: Install packaging tools
+        run: dnf -y install git rpm-build rpmdevtools copr-cli jq sed findutils
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION:-}" ]; then
+            VERSION="${INPUT_VERSION#v}"
+          elif [ -n "${EVENT_TAG:-}" ]; then
+            VERSION="${EVENT_TAG#v}"
+          else
+            VERSION="$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" \
+              | jq -r '.tag_name' | sed 's/^v//')"
+          fi
+          if [ -z "$VERSION" ] || [ "$VERSION" = null ]; then
+            echo "::error::Could not resolve a release version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building Copr package for v${VERSION}"
+
+      - name: Update Version in spec file
+        id: spec
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          CURRENT="$(rpm -q --specfile --qf '%{VERSION}\n' "$SPEC" | head -1)"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Spec already at ${VERSION}"
+            exit 0
+          fi
+          sed -i "s/^Version:.*/Version:        ${VERSION}/" "$SPEC"
+          sed -i "s/^Release:.*/Release:        1%{?dist}/" "$SPEC"
+          ENTRY="* $(date '+%a %b %d %Y') GitHub Action <action@github.com> - ${VERSION}-1\n- Bump to version ${VERSION}\n"
+          sed -i "/^%changelog/a ${ENTRY}" "$SPEC"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # Spec is updated in the working tree for the SRPM even when we do not commit.
+      - name: Commit and push spec bump
+        if: steps.spec.outputs.changed == 'true' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add "$SPEC"
+          git commit -m "chore(rpm): bump spec to ${{ steps.ver.outputs.version }}"
+          git push
+
+      - name: Configure Copr credentials
+        env:
+          COPR_CONFIG: ${{ secrets.COPR_CONFIG }}
+        run: |
+          set -euo pipefail
+          if [ -z "${COPR_CONFIG:-}" ]; then
+            echo "::error::Missing COPR_CONFIG secret. Paste the full [copr-cli] block from https://copr.fedorainfracloud.org/api/"
+            exit 1
+          fi
+          mkdir -p "${HOME}/.config"
+          printf '%s\n' "$COPR_CONFIG" > "${HOME}/.config/copr"
+          chmod 600 "${HOME}/.config/copr"
+
+      - name: Build SRPM
+        id: srpm
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/rpmbuild/SOURCES" "${HOME}/rpmbuild/SPECS"
+          spectool -g -C "${HOME}/rpmbuild/SOURCES" "$SPEC"
+          cp "$SPEC" "${HOME}/rpmbuild/SPECS/git-ssh.spec"
+          rpmbuild -bs "${HOME}/rpmbuild/SPECS/git-ssh.spec"
+          SRPM="$(find "${HOME}/rpmbuild/SRPMS" -name '*.src.rpm' | head -1)"
+          test -n "$SRPM"
+          echo "path=$SRPM" >> "$GITHUB_OUTPUT"
+          echo "Built $(basename "$SRPM")"
+
+      - name: Submit build to Copr
+        run: |
+          set -euo pipefail
+          copr-cli build "$COPR_PROJECT" "${{ steps.srpm.outputs.path }}" \
+            --chroot fedora-43-x86_64 \
+            --chroot fedora-44-x86_64 \
+            --chroot fedora-eln-x86_64 \
+            --chroot fedora-rawhide-x86_64

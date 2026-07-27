@@ -32,6 +32,22 @@ archives:
       - goos: windows
         formats: [zip]
 
+nfpms:
+  - id: git-ssh
+    package_name: git-ssh
+    vendor: The git-ssh Authors
+    homepage: https://github.com/kuyacarlo/ssh-profiles
+    maintainer: kuyacarlo
+    description: Per-repo SSH identity profiles for GitHub (Orca-safe)
+    license: MIT
+    formats:
+      - rpm
+      - deb
+    bindir: /usr/bin
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/git-ssh/LICENSE
+
 checksum:
   name_template: checksums.txt
 
