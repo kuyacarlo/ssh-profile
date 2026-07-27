@@ -33,10 +33,12 @@ type VCS interface {
 // Options controls remote wiring during Use.
 type Options struct {
 	// Target is "demo-repo" or "owner/repo" (e.g. example-org/demo-repo).
-	// When set, origin is created/updated to that GitHub URL.
+	// When set, origin is created/updated to that host URL.
 	Target string
 	// NoRemote skips origin create/update/normalize.
 	NoRemote bool
+	// RemoteHost is the SSH host for origin URLs (default github.com).
+	RemoteHost string
 }
 
 // Result describes what Use changed.
@@ -46,8 +48,8 @@ type Result struct {
 	RemoteAction string // "added", "updated", "unchanged", "skipped"
 }
 
-// SSHCommandFor builds an Orca-safe ssh command that pins one identity
-// while remotes stay on github.com.
+// SSHCommandFor builds an ssh command that pins one identity while remotes
+// stay on the configured host (github.com by default).
 func SSHCommandFor(identityFile string) (string, error) {
 	path, err := file.ParseFilePath(identityFile)
 	if err != nil {
@@ -89,7 +91,9 @@ func Use(vcs VCS, name string, profile config.Profile, opts Options) (Result, er
 		return result, nil
 	}
 
-	remoteURL, action, err := ensureOrigin(vcs, profile, opts.Target)
+	host := remoteurl.NormalizeHost(opts.RemoteHost)
+
+	remoteURL, action, err := ensureOrigin(vcs, profile, host, opts.Target)
 	if err != nil {
 		return result, err
 	}
@@ -98,12 +102,13 @@ func Use(vcs VCS, name string, profile config.Profile, opts Options) (Result, er
 	return result, nil
 }
 
-func ensureOrigin(vcs VCS, profile config.Profile, target string) (string, string, error) {
+func ensureOrigin(vcs VCS, profile config.Profile, host, target string) (string, string, error) {
 	target = strings.TrimSpace(target)
+	host = remoteurl.NormalizeHost(host)
 
 	// Explicit target always wins (folder name irrelevant).
 	if target != "" {
-		url, err := remoteurl.ResolveTarget(profile.GithubUser, target)
+		url, err := remoteurl.ResolveTarget(host, profile.GithubUser, target)
 		if err != nil {
 			return "", "", err
 		}
@@ -131,7 +136,7 @@ func ensureOrigin(vcs VCS, profile config.Profile, target string) (string, strin
 		if err != nil {
 			return "", "", err
 		}
-		normalized, ok := remoteurl.NormalizeGitHub(current)
+		normalized, ok := remoteurl.Normalize(current, host)
 		if !ok {
 			return current, "unchanged", nil
 		}
@@ -153,7 +158,7 @@ func ensureOrigin(vcs VCS, profile config.Profile, target string) (string, strin
 	if err != nil {
 		return "", "", err
 	}
-	url, err := remoteurl.OriginURL(user, remoteurl.RepoNameFromPath(top))
+	url, err := remoteurl.OriginURL(host, user, remoteurl.RepoNameFromPath(top))
 	if err != nil {
 		return "", "", err
 	}

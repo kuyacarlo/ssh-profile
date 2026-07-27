@@ -8,28 +8,56 @@ import (
 	"strings"
 )
 
+const DefaultHost = "github.com"
+
 var (
-	scpGitHub = regexp.MustCompile(`(?i)^(?:git@)?([^:]+):([^/]+)/([^/]+?)(?:\.git)?$`)
-	// host aliases like alice.github.com still carry owner/repo
+	scpRemote = regexp.MustCompile(`(?i)^(?:git@)?([^:]+):([^/]+)/([^/]+?)(?:\.git)?$`)
 )
 
-// OriginURL builds an Orca-safe GitHub SSH remote.
-func OriginURL(githubUser, repo string) (string, error) {
-	user := strings.TrimSpace(githubUser)
+// NormalizeHost returns a lowercased host, defaulting to github.com.
+func NormalizeHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return DefaultHost
+	}
+	return host
+}
+
+// IsGitHubHost reports github.com or *.github.com aliases.
+func IsGitHubHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == DefaultHost || strings.HasSuffix(host, ".github.com")
+}
+
+// CompatibleHost reports whether remoteHost should normalize onto preferred.
+// GitHub family collapses onto github.com; other hosts only match exactly.
+func CompatibleHost(remoteHost, preferred string) bool {
+	preferred = NormalizeHost(preferred)
+	remoteHost = strings.ToLower(strings.TrimSpace(remoteHost))
+	if preferred == DefaultHost {
+		return IsGitHubHost(remoteHost)
+	}
+	return remoteHost == preferred
+}
+
+// OriginURL builds git@<host>:owner/repo.git (GitHub and Gitea-compatible).
+func OriginURL(host, owner, repo string) (string, error) {
+	host = NormalizeHost(host)
+	owner = strings.TrimSpace(owner)
 	repo = strings.TrimSpace(repo)
 	repo = strings.TrimSuffix(repo, ".git")
-	if user == "" {
-		return "", fmt.Errorf("github user is required")
+	if owner == "" {
+		return "", fmt.Errorf("owner is required")
 	}
 	if repo == "" {
 		return "", fmt.Errorf("repository name is required")
 	}
-	return fmt.Sprintf("git@github.com:%s/%s.git", user, repo), nil
+	return fmt.Sprintf("git@%s:%s/%s.git", host, owner, repo), nil
 }
 
-// ResolveTarget turns "demo-repo" or "example-org/demo-repo" into an origin URL.
-// Bare repo names use defaultOwner (profile github_user).
-func ResolveTarget(defaultOwner, target string) (string, error) {
+// ResolveTarget turns "demo-repo" or "owner/repo" into an origin URL on host.
+func ResolveTarget(host, defaultOwner, target string) (string, error) {
+	host = NormalizeHost(host)
 	target = strings.TrimSpace(target)
 	target = strings.TrimSuffix(target, ".git")
 	if target == "" {
@@ -42,58 +70,73 @@ func ResolveTarget(defaultOwner, target string) (string, error) {
 		if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
 			return "", fmt.Errorf("invalid target %q (want repo or owner/repo)", target)
 		}
-		return OriginURL(owner, repo)
+		return OriginURL(host, owner, repo)
 	}
-	return OriginURL(defaultOwner, target)
+	return OriginURL(host, defaultOwner, target)
 }
 
-// ParseOwnerRepo extracts owner/repo from common GitHub remote forms.
-// Accepts github.com and *.github.com Host aliases.
-func ParseOwnerRepo(remote string) (owner, repo string, ok bool) {
+// ParseRemote extracts host/owner/repo from common SSH/HTTPS remote forms.
+func ParseRemote(remote string) (host, owner, repo string, ok bool) {
 	remote = strings.TrimSpace(remote)
 	if remote == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 
 	if strings.Contains(remote, "://") {
 		u, err := url.Parse(remote)
 		if err != nil {
-			return "", "", false
+			return "", "", "", false
 		}
-		host := strings.ToLower(u.Host)
-		if host != "github.com" && !strings.HasSuffix(host, ".github.com") {
-			return "", "", false
+		h := strings.ToLower(u.Host)
+		if strings.Contains(h, ":") { // strip port
+			h = strings.Split(h, ":")[0]
 		}
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-		if len(parts) < 2 {
-			return "", "", false
+		if len(parts) < 2 || h == "" {
+			return "", "", "", false
 		}
-		return parts[0], strings.TrimSuffix(parts[1], ".git"), true
+		return h, parts[0], strings.TrimSuffix(parts[1], ".git"), true
 	}
 
-	m := scpGitHub.FindStringSubmatch(remote)
+	m := scpRemote.FindStringSubmatch(remote)
 	if m == nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	host := strings.ToLower(m[1])
-	if host != "github.com" && !strings.HasSuffix(host, ".github.com") {
-		return "", "", false
-	}
-	return m[2], m[3], true
+	return strings.ToLower(m[1]), m[2], m[3], true
 }
 
-// NormalizeGitHub rewrites a GitHub-like remote onto git@github.com:owner/repo.git.
-// Non-GitHub remotes are left unchanged (ok=false).
-func NormalizeGitHub(remote string) (string, bool) {
-	owner, repo, ok := ParseOwnerRepo(remote)
-	if !ok {
+// ParseOwnerRepo extracts owner/repo when the remote host is GitHub-family
+// or matches preferred (empty preferred => github.com only).
+func ParseOwnerRepo(remote string, preferred ...string) (owner, repo string, ok bool) {
+	pref := DefaultHost
+	if len(preferred) > 0 && strings.TrimSpace(preferred[0]) != "" {
+		pref = preferred[0]
+	}
+	host, owner, repo, ok := ParseRemote(remote)
+	if !ok || !CompatibleHost(host, pref) {
+		return "", "", false
+	}
+	return owner, repo, true
+}
+
+// Normalize rewrites a compatible remote onto git@<preferred>:owner/repo.git.
+// Incompatible remotes are left unchanged (ok=false).
+func Normalize(remote, preferred string) (string, bool) {
+	preferred = NormalizeHost(preferred)
+	host, owner, repo, ok := ParseRemote(remote)
+	if !ok || !CompatibleHost(host, preferred) {
 		return remote, false
 	}
-	out, err := OriginURL(owner, repo)
+	out, err := OriginURL(preferred, owner, repo)
 	if err != nil {
 		return remote, false
 	}
 	return out, true
+}
+
+// NormalizeGitHub rewrites GitHub-family remotes onto git@github.com:owner/repo.git.
+func NormalizeGitHub(remote string) (string, bool) {
+	return Normalize(remote, DefaultHost)
 }
 
 // RepoNameFromPath returns the directory base name for a repo path.

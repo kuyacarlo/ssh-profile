@@ -12,18 +12,22 @@ import (
 )
 
 // Profile is a named SSH identity for git remotes.
-// Remotes stay on github.com; `use` applies the key via core.sshCommand
-// and can create/normalize origin to git@github.com:<github_user>/<repo>.git.
+// `use` applies the key via core.sshCommand and can create/normalize origin to
+// git@<remote_host>:<github_user>/<repo>.git (default host: github.com).
 type Profile struct {
 	IdentityFile string            `json:"identity_file"`
 	GithubUser   string            `json:"github_user,omitempty"`
+	RemoteHost   string            `json:"remote_host,omitempty"` // e.g. github.com or forge.example.com
 	HostAlias    string            `json:"host_alias,omitempty"`
 	Config       map[string]string `json:"config,omitempty"`
 }
 
 // Config is the sidecar profile store.
 type Config struct {
-	Profiles map[string]Profile `json:"profiles"`
+	// RemoteHost is the default git SSH host for origin URLs (default github.com).
+	// Profiles may override with profile.remote_host.
+	RemoteHost string             `json:"remote_host,omitempty"`
+	Profiles   map[string]Profile `json:"profiles"`
 }
 
 // New returns an empty config.
@@ -45,6 +49,20 @@ func (c *Config) Len() int {
 func (c *Config) Lookup(name string) (Profile, bool) {
 	p, ok := c.Profiles[name]
 	return p, ok
+}
+
+// EffectiveRemoteHost returns profile.remote_host, else config.remote_host,
+// else github.com.
+func (c *Config) EffectiveRemoteHost(p Profile) string {
+	if h := strings.TrimSpace(p.RemoteHost); h != "" {
+		return strings.ToLower(h)
+	}
+	if c != nil {
+		if h := strings.TrimSpace(c.RemoteHost); h != "" {
+			return strings.ToLower(h)
+		}
+	}
+	return "github.com"
 }
 
 // Names returns sorted profile names.

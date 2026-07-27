@@ -67,6 +67,16 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	is.Equal(p.Config["IdentitiesOnly"], "yes")
 }
 
+func TestEffectiveRemoteHost(t *testing.T) {
+	is := is.New(t)
+	cfg := New()
+	is.Equal(cfg.EffectiveRemoteHost(Profile{}), "github.com")
+
+	cfg.RemoteHost = "forge.example.com"
+	is.Equal(cfg.EffectiveRemoteHost(Profile{}), "forge.example.com")
+	is.Equal(cfg.EffectiveRemoteHost(Profile{RemoteHost: "github.com"}), "github.com")
+}
+
 func TestLoadCreatesMissingFile(t *testing.T) {
 	is := is.New(t)
 	path := filepath.Join(t.TempDir(), "missing", "config.json")
@@ -74,4 +84,20 @@ func TestLoadCreatesMissingFile(t *testing.T) {
 	is.NoErr(cfg.Load(path))
 	_, err := os.Stat(path)
 	is.NoErr(err)
+}
+
+func TestSaveLoadRemoteHost(t *testing.T) {
+	is := is.New(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := New()
+	cfg.RemoteHost = "forge.example.com"
+	_ = cfg.Store("alice", Profile{IdentityFile: "key", RemoteHost: "github.com"})
+	is.NoErr(cfg.Save(path))
+
+	loaded := New()
+	is.NoErr(loaded.Load(path))
+	is.Equal(loaded.RemoteHost, "forge.example.com")
+	p, ok := loaded.Lookup("alice")
+	is.True(ok)
+	is.Equal(p.RemoteHost, "github.com")
 }

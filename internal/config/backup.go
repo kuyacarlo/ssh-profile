@@ -24,8 +24,9 @@ func BackupPath() (string, error) {
 	return filepath.Join(dir, name), nil
 }
 
-// ReplaceAll replaces all profiles with those from other.
+// ReplaceAll replaces profiles and top-level remote_host with those from other.
 func (c *Config) ReplaceAll(other *Config) {
+	c.RemoteHost = other.RemoteHost
 	c.Profiles = make(map[string]Profile, len(other.Profiles))
 	for name, profile := range other.Profiles {
 		c.Profiles[name] = profile

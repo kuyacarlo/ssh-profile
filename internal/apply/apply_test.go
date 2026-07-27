@@ -161,6 +161,45 @@ func TestUseNoRemoteFlag(t *testing.T) {
 	is.Equal(len(vcs.remotes), 0)
 }
 
+func TestUseForgeRemoteHost(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	vcs := &fakeVCS{
+		repo:    true,
+		top:     filepath.Join(dir, "market"),
+		kv:      map[string]string{},
+		remotes: map[string]string{},
+	}
+	profile := config.Profile{IdentityFile: key, GithubUser: "alice", RemoteHost: "forge.example.com"}
+	result, err := Use(vcs, "forge", profile, Options{RemoteHost: "forge.example.com", Target: "market"})
+	is.NoErr(err)
+	is.Equal(result.RemoteAction, "added")
+	is.Equal(result.RemoteURL, "git@forge.example.com:alice/market.git")
+}
+
+func TestUseNormalizesForgeSSHURL(t *testing.T) {
+	is := is.New(t)
+	dir := t.TempDir()
+	key := filepath.Join(dir, "id_ed25519")
+	writeEd25519Private(t, key)
+
+	vcs := &fakeVCS{
+		repo: true,
+		top:  dir,
+		kv:   map[string]string{},
+		remotes: map[string]string{
+			"origin": "ssh://git@forge.example.com/alice/old.git",
+		},
+	}
+	result, err := Use(vcs, "forge", config.Profile{IdentityFile: key, GithubUser: "alice"}, Options{RemoteHost: "forge.example.com"})
+	is.NoErr(err)
+	is.Equal(result.RemoteAction, "updated")
+	is.Equal(vcs.remotes["origin"], "git@forge.example.com:alice/old.git")
+}
+
 func TestUseRequiresGithubUserWhenNoOrigin(t *testing.T) {
 	is := is.New(t)
 	dir := t.TempDir()

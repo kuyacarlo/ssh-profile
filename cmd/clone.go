@@ -15,16 +15,17 @@ import (
 func (r *Root) cloneCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clone [profile] [repo|owner/repo|url] [directory]",
-		Short: "Clone a GitHub repo with a profile key (Orca-safe)",
+		Short: "Clone a repo with a profile key on the configured remote host",
 		Long: multiline(
-			"Clones over git@github.com (not Host aliases) using the profile's",
-			"private key via GIT_SSH_COMMAND, then applies the profile in the",
-			"new repo so push/fetch keep working under Orca/ADE.",
+			"Clones using the profile's private key via GIT_SSH_COMMAND,",
+			"then applies the profile in the new repo.",
+			"Remote host comes from profile.remote_host, else config.remote_host,",
+			"else github.com — remotes stay on that host (no Host aliases).",
 			"",
 			"Target forms:",
-			"  demo-repo             → git@github.com:<github_user>/demo-repo.git",
-			"  example-org/demo-repo → git@github.com:example-org/demo-repo.git",
-			"  git@github.com:o/r.git (unchanged host)",
+			"  demo-repo             → git@<host>:<github_user>/demo-repo.git",
+			"  example-org/demo-repo → git@<host>:example-org/demo-repo.git",
+			"  git@host:o/r.git      → normalized onto the profile host when compatible",
 		),
 		Example: multiline(
 			`git-ssh clone alice private-repo`,
@@ -43,7 +44,8 @@ func (r *Root) cloneCmd() *cobra.Command {
 				return missingProfileError(name)
 			}
 
-			url, dirHint, err := cloneURL(p.GithubUser, target)
+			host := r.cfg.EffectiveRemoteHost(p)
+			url, dirHint, err := cloneURL(host, p.GithubUser, target)
 			if err != nil {
 				return err
 			}
@@ -89,12 +91,13 @@ func (r *Root) cloneCmd() *cobra.Command {
 			}
 			defer func() { _ = os.Chdir(wd) }()
 
-			result, err := apply.Use(r.git, name, p, apply.Options{})
+			result, err := apply.Use(r.git, name, p, apply.Options{RemoteHost: host})
 			if err != nil {
 				return fmt.Errorf("cloned but failed to apply profile: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Cloned and applied `%s`.\n", name)
 			fmt.Fprintf(cmd.OutOrStdout(), "  path: %s\n", abs)
+			fmt.Fprintf(cmd.OutOrStdout(), "  host: %s\n", host)
 			fmt.Fprintf(cmd.OutOrStdout(), "  ssh: %s\n", result.SSHCommand)
 			if result.RemoteURL != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "  origin: %s\n", result.RemoteURL)
@@ -104,29 +107,29 @@ func (r *Root) cloneCmd() *cobra.Command {
 	}
 }
 
-func cloneURL(defaultOwner, target string) (url, dirHint string, err error) {
+func cloneURL(host, defaultOwner, target string) (url, dirHint string, err error) {
+	host = remoteurl.NormalizeHost(host)
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return "", "", fmt.Errorf("empty clone target")
 	}
-	// Full git/ssh/https URLs: keep host as-is (caller already pinned the key).
+	// Full git/ssh/https URLs: prefer normalizing onto configured host when compatible.
 	if strings.Contains(target, "://") || strings.HasPrefix(target, "git@") {
-		owner, repo, ok := remoteurl.ParseOwnerRepo(target)
-		if ok {
-			u, err := remoteurl.OriginURL(owner, repo)
-			if err != nil {
-				return "", "", err
+		if u, ok := remoteurl.Normalize(target, host); ok {
+			_, repo, _ := remoteurl.ParseOwnerRepo(u, host)
+			if repo == "" {
+				_, _, repo, _ = remoteurl.ParseRemote(target)
 			}
 			return u, repo, nil
 		}
 		base := filepath.Base(strings.TrimSuffix(target, ".git"))
 		return target, base, nil
 	}
-	u, err := remoteurl.ResolveTarget(defaultOwner, target)
+	u, err := remoteurl.ResolveTarget(host, defaultOwner, target)
 	if err != nil {
 		return "", "", err
 	}
-	_, repo, ok := remoteurl.ParseOwnerRepo(u)
+	_, repo, ok := remoteurl.ParseOwnerRepo(u, host)
 	if !ok {
 		repo = remoteurl.RepoNameFromPath(target)
 	}

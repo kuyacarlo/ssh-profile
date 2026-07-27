@@ -46,11 +46,14 @@ func New() *Root {
 			"Per-repo SSH keys for GitHub without Host aliases (Orca-safe).",
 			"",
 			"Layout:",
-			"  ~/.config/git-ssh/config.json     profile store",
+			"  ~/.config/git-ssh/config.json     profile store (+ optional remote_host)",
 			"  ~/.ssh/git-ssh/<profile>/id_ed25519   managed keys",
 			"",
-			"github_user is the default GitHub owner used when wiring origin",
-			"(bare `demo-repo` → git@github.com:<github_user>/demo-repo.git).",
+			"remote_host (config or per-profile) is the SSH host for origin URLs",
+			"(default github.com). Example forge: \"remote_host\": \"forge.example.com\".",
+			"",
+			"github_user is the default owner when wiring origin",
+			"(bare `demo-repo` → git@<remote_host>:<github_user>/demo-repo.git).",
 			"It defaults to the profile name.",
 			"",
 			"Lifetime defaults (once per account, then forever):",
@@ -132,6 +135,7 @@ func (r *Root) addCmd() *cobra.Command {
 	var identity string
 	var alias string
 	var githubUser string
+	var remoteHost string
 	var sets []string
 
 	cmd := &cobra.Command{
@@ -141,6 +145,7 @@ func (r *Root) addCmd() *cobra.Command {
 		Long: multiline(
 			"Defaults that stick:",
 			"  github_user  = profile name (override with --github-user)",
+			"  remote_host  = config.remote_host or github.com (override with --remote-host)",
 			"  identity     = ~/.ssh/git-ssh/<profile>/id_ed25519",
 			"                 (created with ssh-keygen -t ed25519 if missing)",
 			"",
@@ -149,6 +154,7 @@ func (r *Root) addCmd() *cobra.Command {
 		Example: multiline(
 			`git-ssh add alice`,
 			`git-ssh add work --github-user acme-bot`,
+			`git-ssh add forge --remote-host forge.example.com`,
 			`git-ssh add alice --identity ~/.ssh/other/id_ed25519`,
 		),
 		Args: cobra.MaximumNArgs(1),
@@ -166,6 +172,9 @@ func (r *Root) addCmd() *cobra.Command {
 			}
 			if githubUser != "" {
 				profile.GithubUser = githubUser
+			}
+			if remoteHost != "" {
+				profile.RemoteHost = remoteHost
 			}
 			createdKey, err := r.fillProfileDefaults(name, &profile)
 			if err != nil {
@@ -188,8 +197,9 @@ func (r *Root) addCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&identity, "identity", "i", "", "private key path (default: managed ~/.ssh/git-ssh/<profile>/id_ed25519)")
-	cmd.Flags().StringVarP(&githubUser, "github-user", "u", "", "GitHub owner for origin remotes (default: profile name)")
-	cmd.Flags().StringVar(&alias, "alias", "", "optional SSH Host alias (not github.com)")
+	cmd.Flags().StringVarP(&githubUser, "github-user", "u", "", "owner for origin remotes (default: profile name)")
+	cmd.Flags().StringVar(&remoteHost, "remote-host", "", "SSH host for origin URLs (default: config.remote_host or github.com)")
+	cmd.Flags().StringVar(&alias, "alias", "", "optional SSH Host alias (not the real remote host)")
 	cmd.Flags().StringArrayVar(&sets, "set", nil, "extra SSH config Key=Value")
 	return cmd
 }
@@ -259,7 +269,7 @@ func (r *Root) saveProfile(cmd *cobra.Command, name string, profile config.Profi
 	if err := r.saveConfig(); err != nil {
 		return err
 	}
-	if err := include.WriteProfile(name, profile); err != nil {
+	if err := r.writeInclude(name, profile); err != nil {
 		return fmt.Errorf("profile saved but include write failed: %w", err)
 	}
 	action := "Successfully updated"
@@ -268,6 +278,7 @@ func (r *Root) saveProfile(cmd *cobra.Command, name string, profile config.Profi
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s `%s` profile.\n", action, name)
 	fmt.Fprintf(cmd.OutOrStdout(), "  github_user: %s\n", profile.GithubUser)
+	fmt.Fprintf(cmd.OutOrStdout(), "  remote_host: %s\n", r.cfg.EffectiveRemoteHost(profile))
 	fmt.Fprintf(cmd.OutOrStdout(), "  identity: %s\n", profile.IdentityFile)
 	if createdKey {
 		fmt.Fprintln(cmd.OutOrStdout(), "  key: created (ed25519, empty passphrase)")
@@ -275,6 +286,17 @@ func (r *Root) saveProfile(cmd *cobra.Command, name string, profile config.Profi
 	if pub := publicKeyLine(name, profile.IdentityFile); pub != "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "  public key (add to GitHub → SSH keys):")
 		fmt.Fprintf(cmd.OutOrStdout(), "  %s\n", pub)
+	}
+	return nil
+}
+
+func (r *Root) writeInclude(name string, profile config.Profile) error {
+	forWrite := profile
+	if strings.TrimSpace(forWrite.RemoteHost) == "" {
+		forWrite.RemoteHost = r.cfg.EffectiveRemoteHost(profile)
+	}
+	if err := include.WriteProfile(name, forWrite); err != nil {
+		return err
 	}
 	return nil
 }
@@ -456,13 +478,14 @@ func (r *Root) useCmd() *cobra.Command {
 				return missingProfileError(name)
 			}
 			result, err := apply.Use(r.git, name, p, apply.Options{
-				Target:   target,
-				NoRemote: noRemote,
+				Target:     target,
+				NoRemote:   noRemote,
+				RemoteHost: r.cfg.EffectiveRemoteHost(p),
 			})
 			if err != nil {
 				return err
 			}
-			if err := include.WriteProfile(name, p); err != nil {
+			if err := r.writeInclude(name, p); err != nil {
 				return fmt.Errorf("applied locally but include write failed: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Successfully applied `%s` profile to current git repository.\n", name)
@@ -489,13 +512,20 @@ func warnNonGitHubOrigin(cmd *cobra.Command, profile, remoteURL, action string) 
 	if action == "skipped" || strings.TrimSpace(remoteURL) == "" {
 		return
 	}
-	if _, _, ok := remoteurl.ParseOwnerRepo(remoteURL); ok {
+	host, _, _, ok := remoteurl.ParseRemote(remoteURL)
+	if ok && remoteurl.IsGitHubHost(host) {
 		return
 	}
+	if !ok {
+		// Unknown shape — still warn.
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warning: origin is not GitHub (%s); Orca/gh GitHub features will not attach.\n", remoteURL)
+	} else {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warning: origin host is %s (not github.com); Orca/gh GitHub features will not attach.\n", host)
+	}
 	fmt.Fprintf(cmd.ErrOrStderr(),
-		"warning: origin is not GitHub (%s); Orca will report no GitHub source.\n", remoteURL)
-	fmt.Fprintf(cmd.ErrOrStderr(),
-		"  retarget: git-ssh use %s <repo|owner/repo>\n", profile)
+		"  retarget to GitHub: git-ssh use %s <repo|owner/repo>  (with remote_host github.com)\n", profile)
 }
 
 func (r *Root) unuseCmd() *cobra.Command {
@@ -612,7 +642,7 @@ func (r *Root) restoreCmd() *cobra.Command {
 			}
 			for _, name := range r.cfg.Names() {
 				p, _ := r.cfg.Lookup(name)
-				if err := include.WriteProfile(name, p); err != nil {
+				if err := r.writeInclude(name, p); err != nil {
 					return fmt.Errorf("restored config but include write failed for %q: %w", name, err)
 				}
 			}

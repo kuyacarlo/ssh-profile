@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/ssh-profiles/git-ssh/internal/config"
-	"github.com/ssh-profiles/git-ssh/internal/include"
 	"github.com/spf13/cobra"
 )
 
@@ -49,7 +48,7 @@ func (r *Root) importCmd() *cobra.Command {
 			if err := r.saveConfig(); err != nil {
 				return err
 			}
-			if err := include.WriteProfile(args[0], profile); err != nil {
+			if err := r.writeInclude(args[0], profile); err != nil {
 				return fmt.Errorf("imported but include write failed: %w", err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Successfully imported `%s` profile.\n", args[0])

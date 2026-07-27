@@ -92,8 +92,8 @@ func hasInclude(body, glob string) bool {
 }
 
 // WriteProfile writes ~/.ssh/git-ssh.d/<name>.conf for the profile.
-// Host github.com is never written (would break multi-account + Orca).
-// Optional HostAlias becomes Host <alias> HostName github.com.
+// The real remote host is never written as Host (would break multi-account tooling).
+// Optional HostAlias becomes Host <alias> HostName <remote_host>.
 func WriteProfile(name string, profile config.Profile) error {
 	if err := EnsureIncludeLine(); err != nil {
 		return err
@@ -111,6 +111,11 @@ func WriteProfile(name string, profile config.Profile) error {
 		return err
 	}
 
+	remoteHost := strings.TrimSpace(profile.RemoteHost)
+	if remoteHost == "" {
+		remoteHost = "github.com"
+	}
+
 	var b strings.Builder
 	b.WriteString(includeMarker)
 	b.WriteString("\n")
@@ -120,7 +125,9 @@ func WriteProfile(name string, profile config.Profile) error {
 	b.WriteString("# Applied per-repo via: git-ssh use ")
 	b.WriteString(name)
 	b.WriteString("\n")
-	b.WriteString("# (core.sshCommand keeps remotes on github.com for Orca/ADE)\n")
+	b.WriteString("# (core.sshCommand keeps remotes on ")
+	b.WriteString(remoteHost)
+	b.WriteString(")\n")
 	b.WriteString("# IdentityFile ")
 	b.WriteString(identity)
 	b.WriteString("\n")
@@ -129,12 +136,14 @@ func WriteProfile(name string, profile config.Profile) error {
 	if alias == "" {
 		alias = "git-ssh." + sanitize(name)
 	}
-	if alias != "" && !strings.EqualFold(alias, "github.com") {
+	if alias != "" && !strings.EqualFold(alias, remoteHost) {
 		b.WriteString("\n")
 		b.WriteString("Host ")
 		b.WriteString(alias)
 		b.WriteString("\n")
-		b.WriteString("  HostName github.com\n")
+		b.WriteString("  HostName ")
+		b.WriteString(remoteHost)
+		b.WriteString("\n")
 		b.WriteString("  User git\n")
 		b.WriteString("  IdentityFile ")
 		b.WriteString(identity)
