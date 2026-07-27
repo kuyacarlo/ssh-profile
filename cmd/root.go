@@ -363,7 +363,7 @@ func (r *Root) useCmd() *cobra.Command {
 		),
 		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := r.checkRepo(cmd); err != nil {
+			if err := r.checkRepo(); err != nil {
 				return err
 			}
 			if !r.checkProfiles(cmd) {
@@ -430,7 +430,7 @@ func (r *Root) unuseCmd() *cobra.Command {
 		Short:   "Clear git-ssh settings from this git repo",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := r.checkRepo(cmd); err != nil {
+			if err := r.checkRepo(); err != nil {
 				return err
 			}
 			if err := apply.Unuse(r.git); err != nil {
@@ -449,7 +449,7 @@ func (r *Root) currentCmd() *cobra.Command {
 		Short:   "Show active profile in this git repo",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := r.checkRepo(cmd); err != nil {
+			if err := r.checkRepo(); err != nil {
 				return err
 			}
 			name, err := apply.Current(r.git)

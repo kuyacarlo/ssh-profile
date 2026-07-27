@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func (r *Root) checkRepo(cmd *cobra.Command) error {
+func (r *Root) checkRepo() error {
 	if !r.git.IsRepository() {
 		return fmt.Errorf("the current working directory is not a valid git repository")
 	}
