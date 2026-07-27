@@ -92,9 +92,14 @@ jobs:
             echo "::error::Missing COPR_CONFIG secret. Paste the full [copr-cli] block from https://copr.fedorainfracloud.org/api/"
             exit 1
           fi
-          mkdir -p "${HOME}/.config"
-          printf '%s\n' "$COPR_CONFIG" > "${HOME}/.config/copr"
-          chmod 600 "${HOME}/.config/copr"
+          # GHA containers may use /github/home or /root; install for both.
+          for dir in "${HOME}/.config" /root/.config; do
+            mkdir -p "$dir"
+            # Avoid printf format pitfalls; keep exact secret bytes + trailing newline.
+            printf '%s\n' "$COPR_CONFIG" | sed 's/\r$//' > "${dir}/copr"
+            chmod 600 "${dir}/copr"
+          done
+          copr-cli whoami
 
       - name: Build SRPM
         id: srpm
