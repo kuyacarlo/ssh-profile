@@ -1,0 +1,11 @@
+# Local environment
+.env
+
+# Build artifacts
+/git-ssh
+/bin/
+dist/
+
+# Go
+*.test
+*.out
