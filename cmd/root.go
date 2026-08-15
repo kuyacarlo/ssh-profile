@@ -6,13 +6,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ssh-profiles/git-ssh/internal/apply"
-	"github.com/ssh-profiles/git-ssh/internal/config"
-	"github.com/ssh-profiles/git-ssh/internal/git"
-	"github.com/ssh-profiles/git-ssh/internal/include"
-	"github.com/ssh-profiles/git-ssh/internal/keys"
-	"github.com/ssh-profiles/git-ssh/internal/remoteurl"
-	"github.com/ssh-profiles/git-ssh/internal/ui"
+	"github.com/kuyacarlo/ssh-profile/internal/apply"
+	"github.com/kuyacarlo/ssh-profile/internal/config"
+	"github.com/kuyacarlo/ssh-profile/internal/git"
+	"github.com/kuyacarlo/ssh-profile/internal/include"
+	"github.com/kuyacarlo/ssh-profile/internal/keys"
+	"github.com/kuyacarlo/ssh-profile/internal/remoteurl"
+	"github.com/kuyacarlo/ssh-profile/internal/ui"
 	"github.com/spf13/cobra"
 )
 

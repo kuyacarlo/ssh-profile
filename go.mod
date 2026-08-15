@@ -1,4 +1,4 @@
-module github.com/ssh-profiles/git-ssh
+module github.com/kuyacarlo/ssh-profile
 
 go 1.26
 

@@ -6,7 +6,7 @@ Release:        1%{?dist}
 Summary:        Per-repo SSH identity profiles for GitHub (Orca-safe)
 
 License:        MIT
-URL:            https://github.com/kuyacarlo/ssh-profiles
+URL:            https://github.com/kuyacarlo/ssh-profile
 Source0:        %{url}/archive/refs/tags/v%{version}.tar.gz#/%{name}-%{version}.tar.gz
 
 BuildRequires:  golang
@@ -17,7 +17,7 @@ on ~/.ssh/config Host aliases, so it stays compatible with tools (like
 Orca) that need a stable, unaliased origin URL.
 
 %prep
-%autosetup -n ssh-profiles-%{version}
+%autosetup -n ssh-profile-%{version}
 
 %build
 export CGO_ENABLED=0

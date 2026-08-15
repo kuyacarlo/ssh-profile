@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/adrg/xdg"
-	"github.com/ssh-profiles/git-ssh/internal/config"
-	"github.com/ssh-profiles/git-ssh/internal/file"
+	"github.com/kuyacarlo/ssh-profile/internal/config"
+	"github.com/kuyacarlo/ssh-profile/internal/file"
 )
 
 const (

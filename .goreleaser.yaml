@@ -36,7 +36,7 @@ nfpms:
   - id: git-ssh
     package_name: git-ssh
     vendor: The git-ssh Authors
-    homepage: https://github.com/kuyacarlo/ssh-profiles
+    homepage: https://github.com/kuyacarlo/ssh-profile
     maintainer: kuyacarlo
     description: Per-repo SSH identity profiles for GitHub (Orca-safe)
     license: MIT

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/ssh-profiles/git-ssh/cmd"
+	"github.com/kuyacarlo/ssh-profile/cmd"
 )
 
 // Set by -ldflags at build time.

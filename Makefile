@@ -1,5 +1,5 @@
 GOBIN ?= $(shell go env GOPATH)/bin
-PKG = github.com/ssh-profiles/git-ssh
+PKG = github.com/kuyacarlo/ssh-profile
 BIN := git-ssh
 
 VERSION := 0.1.0
