@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -9,10 +10,12 @@ import (
 	"github.com/kuyacarlo/ssh-profile/internal/apply"
 	"github.com/kuyacarlo/ssh-profile/internal/config"
 	"github.com/kuyacarlo/ssh-profile/internal/git"
+	"github.com/kuyacarlo/ssh-profile/internal/gitprofile"
 	"github.com/kuyacarlo/ssh-profile/internal/include"
 	"github.com/kuyacarlo/ssh-profile/internal/keys"
 	"github.com/kuyacarlo/ssh-profile/internal/remoteurl"
 	"github.com/kuyacarlo/ssh-profile/internal/ui"
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 )
 
@@ -27,6 +30,14 @@ type Root struct {
 	filename string
 	cfg      *config.Config
 	git      *git.Git
+	// gitProfile drives the optional git-profile pairing. Nil disables it.
+	gitProfile gitprofile.Runner
+	// confirm is the yes/no prompt. Injectable so tests can drive it without a
+	// terminal. Defaults to ui.Confirm.
+	confirm func(title, affirmative, negative string, in io.Reader, out io.Writer) (bool, error)
+	// isTerminal reports whether a reader is an interactive terminal.
+	// Injectable so tests can force the interactive path.
+	isTerminal func(io.Reader) bool
 }
 
 // New builds the root command with subcommands.
@@ -37,6 +48,9 @@ func New() *Root {
 		CompileDate: "Unknown",
 		cfg:         config.New(),
 		git:         git.New(),
+		gitProfile:  gitprofile.New(),
+		confirm:     ui.Confirm,
+		isTerminal:  isTerminalReader,
 	}
 
 	r.Command = cobra.Command{
@@ -131,6 +145,71 @@ func (r *Root) saveConfig() error {
 	return r.cfg.Save(r.filename)
 }
 
+// offerGitProfileAdd hands off to git-profile's interactive `add` when the
+// companion binary is installed and stdin is a terminal. It is best-effort:
+// a decline or git-profile failure never fails the git-ssh command.
+func (r *Root) offerGitProfileAdd(cmd *cobra.Command, name string) {
+	if r.gitProfile == nil || !r.gitProfile.Available() {
+		return
+	}
+	if !r.isTerminal(cmd.InOrStdin()) {
+		return
+	}
+	confirmed, err := r.confirm(
+		fmt.Sprintf("git-profile is installed. Also add the %q profile there?", name),
+		"Yes",
+		"No",
+		cmd.InOrStdin(),
+		cmd.OutOrStdout(),
+	)
+	if err != nil {
+		return
+	}
+	if !confirmed {
+		return
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "Running `git-profile add` — fill the identity fields, then exit.")
+	if err := r.gitProfile.RunAdd(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: git-profile add failed: %v\n", err)
+	}
+}
+
+// offerGitProfileUse applies the same-named git-profile profile in the current
+// repo when the companion binary is installed and stdin is a terminal.
+func (r *Root) offerGitProfileUse(cmd *cobra.Command, name string) {
+	if r.gitProfile == nil || !r.gitProfile.Available() {
+		return
+	}
+	if !r.isTerminal(cmd.InOrStdin()) {
+		return
+	}
+	confirmed, err := r.confirm(
+		fmt.Sprintf("git-profile is installed. Also apply the %q git identity here?", name),
+		"Yes",
+		"No",
+		cmd.InOrStdin(),
+		cmd.OutOrStdout(),
+	)
+	if err != nil {
+		return
+	}
+	if !confirmed {
+		return
+	}
+	if err := r.gitProfile.RunUse(name, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: git-profile use failed: %v\n", err)
+	}
+}
+
+// isTerminalReader reports whether r is a real terminal.
+func isTerminalReader(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(f.Fd())
+}
+
 func (r *Root) addCmd() *cobra.Command {
 	var identity string
 	var alias string
@@ -192,7 +271,11 @@ func (r *Root) addCmd() *cobra.Command {
 					profile.Config[strings.TrimSpace(key)] = strings.TrimSpace(value)
 				}
 			}
-			return r.saveProfile(cmd, name, profile, !exists, createdKey)
+			if err := r.saveProfile(cmd, name, profile, !exists, createdKey); err != nil {
+				return err
+			}
+			r.offerGitProfileAdd(cmd, name)
+			return nil
 		},
 	}
 
@@ -242,7 +325,11 @@ func (r *Root) addInteractive(cmd *cobra.Command) error {
 		return err
 	}
 	_, existed := r.cfg.Lookup(name)
-	return r.saveProfile(cmd, name, profile, !existed, createdKey)
+	if err := r.saveProfile(cmd, name, profile, !existed, createdKey); err != nil {
+		return err
+	}
+	r.offerGitProfileAdd(cmd, name)
+	return nil
 }
 
 // fillProfileDefaults sets github_user from the profile name and ensures a
@@ -501,6 +588,7 @@ func (r *Root) useCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "  origin: skipped")
 			}
 			warnNonGitHubOrigin(cmd, name, result.RemoteURL, result.RemoteAction)
+			r.offerGitProfileUse(cmd, name)
 			return nil
 		},
 	}
