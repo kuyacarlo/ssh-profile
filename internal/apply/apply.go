@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ssh-profiles/git-ssh/internal/config"
-	"github.com/ssh-profiles/git-ssh/internal/file"
-	"github.com/ssh-profiles/git-ssh/internal/remoteurl"
-	"github.com/ssh-profiles/git-ssh/internal/sshconfig"
+	"github.com/kuyacarlo/ssh-profile/internal/config"
+	"github.com/kuyacarlo/ssh-profile/internal/file"
+	"github.com/kuyacarlo/ssh-profile/internal/remoteurl"
+	"github.com/kuyacarlo/ssh-profile/internal/sshconfig"
 )
 
 const (

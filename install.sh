@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPO="kuyacarlo/ssh-profiles"
+REPO="kuyacarlo/ssh-profile"
 BIN="git-ssh"
 DEST="${DEST:-/usr/local/bin}"
 

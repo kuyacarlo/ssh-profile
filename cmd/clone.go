@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ssh-profiles/git-ssh/internal/apply"
-	"github.com/ssh-profiles/git-ssh/internal/remoteurl"
+	"github.com/kuyacarlo/ssh-profile/internal/apply"
+	"github.com/kuyacarlo/ssh-profile/internal/remoteurl"
 	"github.com/spf13/cobra"
 )
 
