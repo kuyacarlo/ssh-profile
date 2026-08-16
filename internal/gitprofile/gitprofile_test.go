@@ -46,8 +46,8 @@ func TestRunAddAndRunUseExecFake(t *testing.T) {
 	if err := l.RunAdd(strings.NewReader(""), &out, &errOut); err != nil {
 		t.Fatalf("RunAdd: %v", err)
 	}
-	if !strings.Contains(errOut.String(), "ran:") {
-		t.Fatalf("RunAdd did not execute git-profile: %q", errOut.String())
+	if !strings.Contains(errOut.String(), "add") {
+		t.Fatalf("RunAdd did not execute `git-profile add`: %q", errOut.String())
 	}
 
 	errOut.Reset()

@@ -33,7 +33,7 @@ func (l *Linker) Available() bool {
 }
 
 func (l *Linker) RunAdd(in io.Reader, out, errOut io.Writer) error {
-	return l.run(nil, in, out, errOut)
+	return l.run([]string{"add"}, in, out, errOut)
 }
 
 func (l *Linker) RunUse(name string, in io.Reader, out, errOut io.Writer) error {
