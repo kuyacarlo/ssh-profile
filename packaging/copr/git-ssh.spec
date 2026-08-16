@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           git-ssh
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Per-repo SSH identity profiles for GitHub (Orca-safe)
 
@@ -33,5 +33,9 @@ install -Dm0755 git-ssh %{buildroot}%{_bindir}/git-ssh
 %license LICENSE
 
 %changelog
+* Sun Aug 16 2026 kuyacarlo <106532351+kuyacarlo@users.noreply.github.com> - 0.2.0-1
+- Add git-profile pairing offers on add/use
+- Align module path and packaging with renamed repo (ssh-profile)
+
 * Mon Jul 27 2026 kuyacarlo <106532351+kuyacarlo@users.noreply.github.com> - 0.1.0-1
 - Initial packaging
