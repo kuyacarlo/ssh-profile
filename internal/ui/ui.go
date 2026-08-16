@@ -82,6 +82,25 @@ func PromptProfileFields(initial ProfileFormData, in io.Reader, out io.Writer) (
 	return result, nil
 }
 
+// Confirm asks a yes/no question and reports the result.
+func Confirm(title string, affirmative, negative string, in io.Reader, out io.Writer) (bool, error) {
+	var confirmed bool
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(title).
+				Affirmative(affirmative).
+				Negative(negative).
+				Value(&confirmed),
+		),
+	).WithInput(in).WithOutput(out)
+
+	if err := form.Run(); err != nil {
+		return false, err
+	}
+	return confirmed, nil
+}
+
 // IsAborted reports huh user cancel.
 func IsAborted(err error) bool {
 	return errors.Is(err, huh.ErrUserAborted)
