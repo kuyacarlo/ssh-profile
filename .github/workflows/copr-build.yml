@@ -5,8 +5,14 @@ permissions:
   contents: write
 
 on:
+  # NOTE: goreleaser publishes releases with GITHUB_TOKEN, which GitHub does
+  # NOT cascade into `release` events. That trigger is effectively dead for
+  # releases cut by the Release workflow — rely on workflow_run instead.
   release:
     types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
@@ -24,6 +30,13 @@ jobs:
     container:
       image: fedora:44
     steps:
+      - name: Only follow successful Release runs
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion != 'success'
+        run: |
+          echo "Release workflow concluded with ${GITHUB_EVENT_NAME}: ${GITHUB_REF}"
+          echo "::error::Skipping Copr build: Release workflow did not succeed"
+          exit 1
+
       - name: Install packaging tools
         run: dnf -y install git rpm-build rpmdevtools copr-cli jq sed findutils
 
